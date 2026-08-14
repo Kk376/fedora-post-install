@@ -6,6 +6,29 @@ Follows semantic versioning: MAJOR.MINOR.PATCH
 
 ---
 
+## [v5.0.1] – 2026-08-14
+
+### Fixed
+
+- Progress counter no longer counts failed or skipped steps as completed — `show_summary` now reports completed/failed/skipped separately instead of one number
+- `MangoHud.conf` and `.bashrc` are now backed up before being modified, matching what `restore_backups()` already expected to find
+- `setup_copr` and the Antigravity install no longer swallow failures silently (`A && B || true` replaced with explicit warnings on failure)
+- Antigravity CLI install in dev tools was targeting a nonexistent npm package and failing silently every time; now installs via Google's official installer (`curl -fsSL https://antigravity.google/cli/install.sh | bash`, binary `agy`)
+- Steam H264 unlock now kills only the specific process it launched instead of `pkill -f "xdg-open"`, which could match unrelated processes on the system
+- `.zshrc` theme/plugins lines are now set via a verified replace-or-append helper (`set_zshrc_line`) instead of relying on `sed`'s exit code, which returns 0 whether or not anything actually matched
+- Disk space check now warns explicitly when it can't determine free space, instead of silently falling through to "OK" with a blank value
+- Removed stale `code` version check from `show_versions` (leftover from before the switch to Antigravity); checks `agy` instead
+
+### Changed
+
+- Antigravity repo file still uses `gpgcheck=0` — this matches Google's own official Fedora/RHEL install instructions, which don't currently publish a signing key for the RPM repo (their APT instructions do). Rather than leave that undisclosed, the script now warns about it explicitly when the step runs.
+
+### Docs
+
+- README profile table now lists `multimedia` under the `gaming` profile, matching what the profile actually installs (it was already running `setup_browser_multimedia`, just not documented)
+
+---
+
 ## [v5.0.0] – 2026-08-14
 
 ### Added

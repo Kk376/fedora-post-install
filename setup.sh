@@ -1,7 +1,7 @@
 #!/bin/bash
 # Fedora 44 Post-Install Setup Script
 # Author: Kushagra Kumar
-# Version: 5.0.0
+# Version: 5.0.1
 
 set -euo pipefail
 
@@ -11,7 +11,7 @@ set -euo pipefail
 DRY_RUN=false
 BACKUP_DIR="$HOME/.config/fedora-setup-backups/$(date +%Y%m%d_%H%M%S)"
 LOG_FILE="/tmp/fedora-setup-$(date +%Y%m%d_%H%M%S).log"
-SCRIPT_VERSION="5.0.0"
+SCRIPT_VERSION="5.0.1"
 PROFILE="full"
 FORCE_RERUN=false
 STATE_FILE="$HOME/.config/fedora-setup/state.txt"
@@ -89,6 +89,8 @@ dry() { echo -e "${MAGENTA}[DRY-RUN]${NC} Would execute: $1"; }
 
 # Progress tracking
 COMPLETED_STEPS=0
+FAILED_STEPS=0
+SKIPPED_STEPS=0
 TOTAL_STEPS=0
 START_TIME=$(date +%s)
 
@@ -147,6 +149,19 @@ github_download() {
         return $?
     fi
     return 1
+}
+
+# Ensure a line is set in ~/.zshrc: replace any line matching an ERE pattern,
+# or append if no line matches. Verifies the end state via grep instead of
+# trusting sed's exit code, which returns 0 whether or not anything matched.
+set_zshrc_line() {
+    local pattern="$1" desired="$2"
+    grep -qxF "$desired" ~/.zshrc 2>/dev/null && return 0
+    if grep -qE "$pattern" ~/.zshrc 2>/dev/null; then
+        awk -v pat="$pattern" -v repl="$desired" \
+            '$0 ~ pat { print repl; next } { print }' ~/.zshrc > ~/.zshrc.tmp && mv ~/.zshrc.tmp ~/.zshrc
+    fi
+    grep -qxF "$desired" ~/.zshrc 2>/dev/null || echo "$desired" >> ~/.zshrc
 }
 
 # Backup a file before modifying
@@ -295,9 +310,15 @@ check_network() {
 check_disk_space() {
     local required_gb=${1:-20}
     local target_dir=${2:-$HOME}
-    local available_gb=$(df -BG "$target_dir" 2>/dev/null | awk 'NR==2 {print $4}' | sed 's/G//')
-    
-    if [[ -n "$available_gb" ]] && (( available_gb < required_gb )); then
+    local available_gb
+    available_gb=$(df -BG "$target_dir" 2>/dev/null | awk 'NR==2 {print $4}' | sed 's/G//')
+
+    if [[ -z "$available_gb" ]]; then
+        warn "Could not determine free disk space for $target_dir - skipping check"
+        return 0
+    fi
+
+    if (( available_gb < required_gb )); then
         warn "Low disk space: ${available_gb}GB available (${required_gb}GB recommended)"
         if ! confirm "Continue anyway?" "N"; then
             error "Aborting due to low disk space"
@@ -343,7 +364,7 @@ emergency_rollback() {
 show_versions() {
     log "Checking installed versions..."
     echo ""
-    local packages=("zsh" "brave-browser" "code" "antigravity" "docker" "tlp" "steam" "ffmpeg")
+    local packages=("zsh" "brave-browser" "agy" "antigravity" "docker" "tlp" "steam" "ffmpeg")
     for pkg in "${packages[@]}"; do
         local ver=$(check_version "$pkg" 2>/dev/null)
         if [[ -n "$ver" ]]; then
@@ -547,8 +568,8 @@ setup_shell() {
     backup_file "$HOME/.zshrc"
     
     if ! $DRY_RUN; then
-        sed -i 's/ZSH_THEME=.*/ZSH_THEME="powerlevel10k\/powerlevel10k"/' ~/.zshrc 2>/dev/null || echo 'ZSH_THEME="powerlevel10k/powerlevel10k"' >> ~/.zshrc
-        sed -i 's/^plugins=(.*)/plugins=(git zsh-autosuggestions zsh-syntax-highlighting)/' ~/.zshrc 2>/dev/null || echo 'plugins=(git zsh-autosuggestions zsh-syntax-highlighting)' >> ~/.zshrc
+        set_zshrc_line 'ZSH_THEME=' 'ZSH_THEME="powerlevel10k/powerlevel10k"'
+        set_zshrc_line '^plugins=\(' 'plugins=(git zsh-autosuggestions zsh-syntax-highlighting)'
         
         cat >> ~/.zshrc <<'EOF'
 
@@ -697,9 +718,21 @@ setup_drivers() {
 # ==============================================================================
 setup_copr() {
     log "Installing COPR packages..."
-    run_sudo dnf copr enable -y alternateved/eza && run_sudo dnf install -y eza || true
-    run_sudo dnf copr enable -y zeno/scrcpy && run_sudo dnf install -y scrcpy || true
-    run_sudo dnf copr enable -y lihaohong/yazi && run_sudo dnf install -y yazi file ffmpeg 7zip jq poppler fd rg fzf zoxide resvg xclip wl-clipboard xsel ImageMagick || true
+    if run_sudo dnf copr enable -y alternateved/eza; then
+        run_sudo dnf install -y eza || warn "eza install failed"
+    else
+        warn "Failed to enable COPR repo alternateved/eza"
+    fi
+    if run_sudo dnf copr enable -y zeno/scrcpy; then
+        run_sudo dnf install -y scrcpy || warn "scrcpy install failed"
+    else
+        warn "Failed to enable COPR repo zeno/scrcpy"
+    fi
+    if run_sudo dnf copr enable -y lihaohong/yazi; then
+        run_sudo dnf install -y yazi file ffmpeg 7zip jq poppler fd rg fzf zoxide resvg xclip wl-clipboard xsel ImageMagick || warn "yazi and related tools install failed"
+    else
+        warn "Failed to enable COPR repo lihaohong/yazi"
+    fi
     step_complete "COPR packages installed"
 }
 
@@ -800,15 +833,17 @@ setup_packages() {
     # Steam H264 unlock (fixes some games)
     log "Unlocking Steam H264 codec..."
     if ! $DRY_RUN; then
+        local unlock_pid
         if flatpak list 2>/dev/null | grep -q "com.valvesoftware.Steam"; then
             info "Flatpak Steam detected"
             xdg-open steam://unlockh264/ 2>/dev/null &
+            unlock_pid=$!
         else
             steam steam://unlockh264/ 2>/dev/null &
+            unlock_pid=$!
         fi
         sleep 2
-        pkill -f "steam://unlockh264" 2>/dev/null || true
-        pkill -f "xdg-open" 2>/dev/null || true
+        kill "$unlock_pid" 2>/dev/null || true
     else
         dry "Unlock Steam H264 codec"
     fi
@@ -822,6 +857,7 @@ setup_packages() {
     if command -v mangohud >/dev/null 2>&1; then
         if ! $DRY_RUN; then
             mkdir -p ~/.config/MangoHud
+            backup_file "$HOME/.config/MangoHud/MangoHud.conf"
             cat > ~/.config/MangoHud/MangoHud.conf <<'MANGOHUD'
 legacy_layout=false
 position=top-left
@@ -880,9 +916,17 @@ setup_dev() {
     fi
     
     # Antigravity CLI (replaces discontinued Gemini CLI)
-    if command -v npm >/dev/null; then
-        run_sudo npm install -g @google/antigravity-cli 2>/dev/null || run_sudo npm install -g antigravity-cli 2>/dev/null || true
-        info "Antigravity CLI installed"
+    # Not an npm package - Google ships it as a standalone binary via their own installer
+    if ! $DRY_RUN; then
+        if command -v agy >/dev/null 2>&1; then
+            info "Antigravity CLI (agy) already installed"
+        elif curl -fsSL https://antigravity.google/cli/install.sh | bash 2>/dev/null; then
+            success "Antigravity CLI (agy) installed"
+        else
+            warn "Antigravity CLI install failed - try manually: curl -fsSL https://antigravity.google/cli/install.sh | bash"
+        fi
+    else
+        dry "Install Antigravity CLI (agy) via official installer"
     fi
     
     step_complete "Dev tools installed"
@@ -893,6 +937,8 @@ setup_dev() {
 # ==============================================================================
 setup_antigravity() {
     log "Installing Antigravity..."
+    warn "Antigravity's Fedora/RHEL repo ships with gpgcheck=0 (Google's own install docs, not just this script)"
+    info "Their APT instructions publish a signing key; their DNF/YUM instructions currently don't - you're trusting HTTPS+Google's infra here, not GPG package signing"
     if ! $DRY_RUN; then
         run_sudo tee /etc/yum.repos.d/antigravity.repo > /dev/null <<'EOL'
 [antigravity-rpm]
@@ -901,7 +947,11 @@ baseurl=https://us-central1-yum.pkg.dev/projects/antigravity-auto-updater-dev/an
 enabled=1
 gpgcheck=0
 EOL
-        run_sudo dnf makecache && run_sudo dnf install -y antigravity 2>/dev/null || true
+        if run_sudo dnf makecache; then
+            run_sudo dnf install -y antigravity || warn "Failed to install Antigravity"
+        else
+            warn "Failed to refresh Antigravity repo metadata"
+        fi
     else
         dry "Add Antigravity repo and install antigravity"
     fi
@@ -1099,9 +1149,11 @@ setup_kvm() {
         
         # Add LIBVIRT_DEFAULT_URI to shell configs
         if [[ -f ~/.bashrc ]] && ! grep -q "LIBVIRT_DEFAULT_URI" ~/.bashrc; then
+            backup_file "$HOME/.bashrc"
             echo 'export LIBVIRT_DEFAULT_URI="qemu:///system"' >> ~/.bashrc
         fi
         if [[ -f ~/.zshrc ]] && ! grep -q "LIBVIRT_DEFAULT_URI" ~/.zshrc; then
+            backup_file "$HOME/.zshrc"
             echo 'export LIBVIRT_DEFAULT_URI="qemu:///system"' >> ~/.zshrc
         fi
         success "User added to libvirt group"
@@ -1156,7 +1208,7 @@ show_summary() {
     local mins=$((duration / 60)) secs=$((duration % 60))
     
     echo -e "\n${GREEN}=== INSTALLATION SUMMARY ===${NC}"
-    echo "Time: ${mins}m ${secs}s | Steps: ${COMPLETED_STEPS}/${TOTAL_STEPS}"
+    echo "Time: ${mins}m ${secs}s | Steps: ${COMPLETED_STEPS} completed, ${FAILED_STEPS} failed, ${SKIPPED_STEPS} skipped (of ${TOTAL_STEPS})"
     echo ""
     
     echo "Service Status:"
@@ -1308,11 +1360,11 @@ main() {
                 fi
             else
                 warn "$name had issues"
-                COMPLETED_STEPS=$((COMPLETED_STEPS + 1))
+                FAILED_STEPS=$((FAILED_STEPS + 1))
             fi
         else
             warn "Skipped: $name"
-            COMPLETED_STEPS=$((COMPLETED_STEPS + 1))
+            SKIPPED_STEPS=$((SKIPPED_STEPS + 1))
         fi
     done
     

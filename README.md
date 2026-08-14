@@ -21,14 +21,18 @@ Built from years of actual Fedora usage, covering the things I find myself setti
 
 ---
 
-## What's New in v5.0.0
+## What's New in v5.0.1
 
-- Updated for Fedora 44
-- Replaced discontinued Gemini CLI with Antigravity CLI (folded into dev tools)
-- Removed rarely-used steps: OnlyOffice, Winboat, LM Studio, MangoHud config (standalone), preload, ani-cli
-- MangoHud config folded into the packages step (auto-configures if mangohud is installed)
-- Extracted reusable `github_download()` helper for all GitHub release fetches
-- Profiles updated to match the leaner step list
+- Progress summary now reports completed/failed/skipped steps separately instead of one number that counted failures and skips as done
+- `MangoHud.conf` and `.bashrc` are now backed up before being modified
+- COPR and Antigravity installs report failures instead of swallowing them silently
+- Antigravity CLI now installs via Google's official installer instead of a nonexistent npm package
+- Steam H264 unlock kills only the process it launched, not every `xdg-open` on the system
+- `.zshrc` theme/plugin lines are set through a verified helper instead of relying on `sed`'s exit code
+- Disk space check now says explicitly when it can't determine free space, instead of silently reporting OK
+- The Antigravity repo's `gpgcheck=0` is now called out explicitly when the step runs (see Warnings below)
+
+See [CHANGELOG.md](CHANGELOG.md) for the full history.
 
 ---
 
@@ -58,7 +62,7 @@ Built from years of actual Fedora usage, covering the things I find myself setti
 | ------------- | --------------------------------------------------- |
 | `minimal`     | DNF config, fonts, shell                            |
 | `dev`         | Minimal + dev tools, Docker, Antigravity, KVM       |
-| `gaming`      | Minimal + GPU drivers, packages, Flatpaks           |
+| `gaming`      | Minimal + GPU drivers, packages, Flatpaks, multimedia |
 | `workstation` | Dev + DNS, KVM/QEMU                                |
 | `creator`     | Gaming + multimedia, COPR tools                    |
 | `full`        | All steps (default)                                 |
@@ -80,6 +84,7 @@ Built from years of actual Fedora usage, covering the things I find myself setti
 - NVIDIA users: read the Secure Boot prompts carefully
 - ZSH default shell change needs a logout/login
 - Docker and libvirt group changes need a reboot or re-login
+- The Antigravity repo is added with `gpgcheck=0` — this matches Google's own official Fedora/RHEL install instructions, which currently don't publish a signing key for the RPM repo (their APT/Debian instructions do). You're relying on HTTPS + Google's infrastructure for that package, not GPG signature verification. The script warns about this when the step runs; if that's not an acceptable trade-off for you, skip `setup_antigravity` and install manually once Google publishes a key.
 
 ---
 
@@ -107,11 +112,11 @@ Intel media driver, AMD freeworld VA/VDPAU, NVIDIA proprietary (akmods, Secure B
 
 ### Dev Tools
 
-GCC, Clang, LLVM, Java, Node.js, Python, Docker + Docker Compose, Corepack, Antigravity CLI, Rust (optional), Android tools, debuggers, build systems.
+GCC, Clang, LLVM, Java, Node.js, Python, Docker + Docker Compose, Corepack, Antigravity CLI (`agy`, via Google's official installer), Rust (optional), Android tools, debuggers, build systems.
 
 ### Gaming
 
-Steam (with H.264 unlock), MangoHud (preconfigured), ProtonPlus.
+Steam (with H.264 unlock), MangoHud (auto-configured if installed), ProtonPlus.
 
 ### Cloud
 
