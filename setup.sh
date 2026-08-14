@@ -1,10 +1,7 @@
 #!/bin/bash
-# ==============================================================================
-# Fedora 43 Post-Install Setup Script
+# Fedora 44 Post-Install Setup Script
 # Author: Kushagra Kumar
-# Automates DevTools + Gaming + Multimedia on Fedora 43
-# Version: 4.0.0
-# ==============================================================================
+# Version: 5.0.0
 
 set -euo pipefail
 
@@ -14,7 +11,7 @@ set -euo pipefail
 DRY_RUN=false
 BACKUP_DIR="$HOME/.config/fedora-setup-backups/$(date +%Y%m%d_%H%M%S)"
 LOG_FILE="/tmp/fedora-setup-$(date +%Y%m%d_%H%M%S).log"
-SCRIPT_VERSION="4.0.0"
+SCRIPT_VERSION="5.0.0"
 PROFILE="full"
 FORCE_RERUN=false
 STATE_FILE="$HOME/.config/fedora-setup/state.txt"
@@ -39,7 +36,7 @@ while [[ $# -gt 0 ]]; do
             shift
             ;;
         --help|-h)
-            echo "Fedora 43 Post-Install Setup Script v${SCRIPT_VERSION}"
+            echo "Fedora 44 Post-Install Setup Script v${SCRIPT_VERSION}"
             echo ""
             echo "Usage: $0 [OPTIONS]"
             echo ""
@@ -48,9 +45,9 @@ while [[ $# -gt 0 ]]; do
             echo "  --profile=PROFILE      Choose setup profile:"
             echo "                           minimal     - DNF, fonts, shell only"
             echo "                           dev         - Minimal + dev tools, Docker, Antigravity"
-            echo "                           gaming      - Minimal + drivers, packages, MangoHud"
-            echo "                           workstation - Dev + Virtualization + Office"
-            echo "                           creator     - Gaming + Multimedia + AI tools"
+            echo "                           gaming      - Minimal + drivers, packages, Flatpaks"
+            echo "                           workstation - Dev + DNS, KVM/QEMU"
+            echo "                           creator     - Gaming + Multimedia, COPR tools"
             echo "                           full        - All steps (default)"
             echo "  --force, -f            Re-run completed steps"
             echo "  --help, -h             Show this help message"
@@ -92,7 +89,7 @@ dry() { echo -e "${MAGENTA}[DRY-RUN]${NC} Would execute: $1"; }
 
 # Progress tracking
 COMPLETED_STEPS=0
-TOTAL_STEPS=22
+TOTAL_STEPS=0
 START_TIME=$(date +%s)
 
 step_complete() {
@@ -122,6 +119,34 @@ run_sudo() {
     else
         sudo "$@"
     fi
+}
+
+# Download a release asset from GitHub.
+# Usage: github_download <owner/repo> <asset_pattern> <output_path> [fallback_url]
+# asset_pattern is a grep -E regex to match the asset filename.
+# Returns 0 on success, 1 on failure.
+github_download() {
+    local repo="$1" pattern="$2" output="$3" fallback="${4:-}"
+    local api_url="https://api.github.com/repos/$repo/releases/latest"
+    local download_url=""
+    local api_response
+
+    api_response=$(curl -sfL --max-time 10 "$api_url" 2>/dev/null)
+    if [[ -n "$api_response" ]]; then
+        if command -v jq &>/dev/null; then
+            download_url=$(echo "$api_response" | jq -r ".assets[] | select(.name | test(\"$pattern\")) | .browser_download_url" 2>/dev/null | head -1)
+        else
+            download_url=$(echo "$api_response" | grep -oP '"browser_download_url":\s*"\K[^"]*' | grep -E "$pattern" | head -1)
+        fi
+    fi
+
+    [[ -z "$download_url" ]] && download_url="$fallback"
+
+    if [[ -n "$download_url" ]]; then
+        curl -fL --max-time 120 -o "$output" "$download_url" 2>/dev/null
+        return $?
+    fi
+    return 1
 }
 
 # Backup a file before modifying
@@ -236,9 +261,17 @@ confirm() {
         dry "Prompt: $prompt (auto-yes in dry-run)"
         return 0
     fi
-    [[ "$default" == "Y" ]] && read -p "$prompt (Y/n): " -n 1 -r yn || read -p "$prompt (y/N): " -n 1 -r yn
+    if [[ "$default" == "Y" ]]; then
+        read -p "$prompt (Y/n): " -n 1 -r yn
+    else
+        read -p "$prompt (y/N): " -n 1 -r yn
+    fi
     echo
-    [[ "$default" == "Y" ]] && { [[ -z "$yn" ]] || [[ "$yn" =~ ^[Yy]$ ]]; } || [[ "$yn" =~ ^[Yy]$ ]]
+    if [[ "$default" == "Y" ]]; then
+        [[ -z "$yn" || "$yn" =~ ^[Yy]$ ]]
+    else
+        [[ "$yn" =~ ^[Yy]$ ]]
+    fi
 }
 
 # Network check
@@ -462,19 +495,19 @@ setup_nosleep() {
     log "Disabling auto-sleep..."
     run_sudo mkdir -p /var/lib/gdm/.config/dconf
     run_sudo chown -R gdm:gdm /var/lib/gdm/.config && run_sudo chmod 0700 /var/lib/gdm/.config
-    
-    # GDM settings
-    run_sudo -u gdm dbus-run-session gsettings set org.gnome.settings-daemon.plugins.power sleep-inactive-ac-timeout 0 2>/dev/null || true
-    run_sudo -u gdm dbus-run-session gsettings set org.gnome.settings-daemon.plugins.power sleep-inactive-ac-type 'nothing' 2>/dev/null || true
-    run_sudo -u gdm dbus-run-session gsettings set org.gnome.settings-daemon.plugins.power sleep-inactive-battery-timeout 0 2>/dev/null || true
-    run_sudo -u gdm dbus-run-session gsettings set org.gnome.settings-daemon.plugins.power sleep-inactive-battery-type 'nothing' 2>/dev/null || true
-    
-    # User settings
-    gsettings set org.gnome.settings-daemon.plugins.power sleep-inactive-ac-timeout 0 2>/dev/null || true
-    gsettings set org.gnome.settings-daemon.plugins.power sleep-inactive-ac-type 'nothing' 2>/dev/null || true
-    gsettings set org.gnome.settings-daemon.plugins.power sleep-inactive-battery-timeout 0 2>/dev/null || true
-    gsettings set org.gnome.settings-daemon.plugins.power sleep-inactive-battery-type 'nothing' 2>/dev/null || true
-    
+
+    local keys=(
+        "sleep-inactive-ac-timeout 0"
+        "sleep-inactive-ac-type nothing"
+        "sleep-inactive-battery-timeout 0"
+        "sleep-inactive-battery-type nothing"
+    )
+    for entry in "${keys[@]}"; do
+        local key=${entry%% *} val=${entry#* }
+        run_sudo -u gdm dbus-run-session gsettings set org.gnome.settings-daemon.plugins.power "$key" "$val" 2>/dev/null || true
+        gsettings set org.gnome.settings-daemon.plugins.power "$key" "$val" 2>/dev/null || true
+    done
+
     step_complete "No-sleep configured"
 }
 
@@ -649,11 +682,9 @@ setup_drivers() {
 # ==============================================================================
 setup_copr() {
     log "Installing COPR packages..."
-    run_sudo dnf copr enable -y elxreno/preload && run_sudo dnf install -y preload || true
     run_sudo dnf copr enable -y alternateved/eza && run_sudo dnf install -y eza || true
     run_sudo dnf copr enable -y zeno/scrcpy && run_sudo dnf install -y scrcpy || true
     run_sudo dnf copr enable -y lihaohong/yazi && run_sudo dnf install -y yazi file ffmpeg 7zip jq poppler fd rg fzf zoxide resvg xclip wl-clipboard xsel ImageMagick || true
-    run_sudo dnf copr enable -y derisis13/ani-cli && run_sudo dnf install -y mpv ani-cli || true
     step_complete "COPR packages installed"
 }
 
@@ -671,31 +702,10 @@ setup_fonts() {
     run_sudo rpm -ivh --nodigest --nofiledigest msttcore-fonts-installer-2.6-1.noarch.rpm 2>/dev/null || true
     rm -f msttcore-fonts-installer-2.6-1.noarch.rpm
     
-    # Download FiraCode Nerd Font from GitHub releases
     log "Downloading FiraCode Nerd Font..."
     mkdir -p ~/.local/share/fonts
-    
-    local firacode_url="https://github.com/ryanoasis/nerd-fonts/releases/latest/download/FiraCode.zip"
-    local firacode_downloaded=false
-    
-    # Try GitHub's stable redirect URL first (most reliable)
-    if curl -fL --max-time 120 -o /tmp/FiraCode.zip "$firacode_url" 2>/dev/null; then
-        firacode_downloaded=true
-    else
-        # Fallback: Try GitHub API to get the actual release URL
-        warn "Direct download failed, trying GitHub API..."
-        local api_url
-        if command -v jq &>/dev/null; then
-            api_url=$(curl -sfL --max-time 10 https://api.github.com/repos/ryanoasis/nerd-fonts/releases/latest 2>/dev/null | jq -r '.assets[] | select(.name == "FiraCode.zip") | .browser_download_url' 2>/dev/null)
-        else
-            api_url=$(curl -sfL --max-time 10 https://api.github.com/repos/ryanoasis/nerd-fonts/releases/latest 2>/dev/null | grep -oP '"browser_download_url":\s*"\K[^"]*FiraCode\.zip' | head -1)
-        fi
-        if [[ -n "$api_url" ]] && curl -fL --max-time 120 -o /tmp/FiraCode.zip "$api_url" 2>/dev/null; then
-            firacode_downloaded=true
-        fi
-    fi
-    
-    if $firacode_downloaded && [[ -f /tmp/FiraCode.zip ]]; then
+    if github_download "ryanoasis/nerd-fonts" "FiraCode\\.zip" "/tmp/FiraCode.zip" \
+        "https://github.com/ryanoasis/nerd-fonts/releases/latest/download/FiraCode.zip"; then
         unzip -oq /tmp/FiraCode.zip -d ~/.local/share/fonts/ && rm -f /tmp/FiraCode.zip
         success "FiraCode Nerd Font installed"
     else
@@ -755,7 +765,7 @@ setup_packages() {
     run_sudo dnf install -y --skip-unavailable gcc clang fastfetch make cmake perl wmctrl cargo maven bat \
         java-latest-openjdk java-latest-openjdk-devel nodejs python3 python3-pip wget htop unzip unrar \
         p7zip p7zip-plugins ntfs-3g gparted timeshift vlc steam mangohud \
-        discord telegram-desktop vim nvim gh android-tools libva-utils gstreamer1-plugin-openh264
+        discord telegram-desktop vim neovim gh android-tools libva-utils gstreamer1-plugin-openh264
 
     run_sudo dnf config-manager setopt fedora-cisco-openh264.enabled=1
     
@@ -776,10 +786,24 @@ setup_packages() {
     info "  • Downloads → Disable 'Shader Pre-Caching'"
     info "  • Interface → Client Beta Participation → Steam Beta Update"
     
-    # Optional Yaru theme
-    if confirm "Install Yaru theme (Ubuntu-style)?" "N"; then
-        run_sudo dnf install -y yaru-theme
-        info "Yaru installed. Apply in GNOME Tweaks."
+    # MangoHud config
+    if command -v mangohud >/dev/null 2>&1; then
+        mkdir -p ~/.config/MangoHud
+        cat > ~/.config/MangoHud/MangoHud.conf <<'MANGOHUD'
+legacy_layout=false
+position=top-left
+font_size=32
+fps
+frametime
+frametime_color_change
+gpu_stats
+gpu_temp
+cpu_stats
+cpu_temp
+ram
+vram
+MANGOHUD
+        info "MangoHud configured"
     fi
     
     step_complete "Packages installed"
@@ -801,36 +825,27 @@ setup_dev() {
     if command -v ccache >/dev/null 2>&1; then
         ccache --set-config=max_size=50G && ccache --set-config=compression=true
         mkdir -p ~/.ccache
-        echo "cache_dir = $HOME/.ccache" >> ~/.ccache/ccache.conf 2>/dev/null || true
+        grep -qx "cache_dir = $HOME/.ccache" ~/.ccache/ccache.conf 2>/dev/null || \
+            echo "cache_dir = $HOME/.ccache" >> ~/.ccache/ccache.conf
         info "ccache configured: 50G max, compression enabled"
     fi
     
     confirm "Install Rust toolchain?" "N" && run_sudo dnf install -y rust cargo rustup rustfmt clippy rust-analyzer
     
+    # Corepack (yarn/pnpm management)
+    if command -v npm >/dev/null; then
+        run_sudo npm install -g corepack 2>/dev/null || true
+        run_sudo corepack enable 2>/dev/null || true
+        info "Corepack enabled"
+    fi
+    
+    # Antigravity CLI (replaces discontinued Gemini CLI)
+    if command -v npm >/dev/null; then
+        run_sudo npm install -g @google/antigravity-cli 2>/dev/null || run_sudo npm install -g antigravity-cli 2>/dev/null || true
+        info "Antigravity CLI installed"
+    fi
+    
     step_complete "Dev tools installed"
-}
-
-# ==============================================================================
-# 14. MangoHud Config
-# ==============================================================================
-setup_mangohud() {
-    log "Configuring MangoHud..."
-    mkdir -p ~/.config/MangoHud
-    cat > ~/.config/MangoHud/MangoHud.conf <<'EOF'
-legacy_layout=false
-position=top-left
-font_size=32
-fps
-frametime
-frametime_color_change
-gpu_stats
-gpu_temp
-cpu_stats
-cpu_temp
-ram
-vram
-EOF
-    step_complete "MangoHud configured"
 }
 
 # ==============================================================================
@@ -871,16 +886,6 @@ SETTINGS
         success "Antigravity settings created"
     fi
     step_complete "Antigravity configured"
-}
-
-# ==============================================================================
-# 16. OnlyOffice
-# ==============================================================================
-setup_office() {
-    log "Installing OnlyOffice..."
-    run_sudo dnf install -y https://download.onlyoffice.com/repo/centos/main/noarch/onlyoffice-repo.noarch.rpm
-    run_sudo dnf install -y onlyoffice-desktopeditors
-    step_complete "OnlyOffice installed"
 }
 
 # ==============================================================================
@@ -946,23 +951,13 @@ EOF
     fi
     
     run_sudo usermod -aG docker $USER
-    
-    # Enable docker and containerd services
-    run_sudo systemctl enable --now docker 2>/dev/null || true
-    run_sudo systemctl enable docker.service 2>/dev/null || true
+
+    # Enable and start docker + containerd
     run_sudo systemctl enable containerd.service 2>/dev/null || true
-    
-    # Check if docker socket/service conflicts exist
     if sudo systemctl is-failed docker &>/dev/null; then
-        warn "Docker service in failed state - attempting reset"
         run_sudo systemctl reset-failed docker 2>/dev/null || true
     fi
-    
-    # Start docker if not already running
-    if ! sudo systemctl is-active --quiet docker; then
-        run_sudo systemctl start docker 2>/dev/null || true
-        sleep 2
-    fi
+    run_sudo systemctl enable --now docker 2>/dev/null || true
     
     if sudo systemctl is-active --quiet docker; then
         success "Docker running"
@@ -975,164 +970,23 @@ EOF
         info "  • Check: sudo journalctl -u docker --no-pager -n 20"
     fi
     
-    # Install Docker Compose CLI plugin (latest version, with fallback)
+    # Docker Compose CLI plugin
     log "Installing Docker Compose CLI plugin..."
     DOCKER_CONFIG=${DOCKER_CONFIG:-$HOME/.docker}
     mkdir -p "$DOCKER_CONFIG/cli-plugins"
-    
     if [[ ! -f "$DOCKER_CONFIG/cli-plugins/docker-compose" ]]; then
-        local compose_url=""
-        local compose_version=""
-        
-        # Method 1: Get latest version from GitHub API
-        log "Fetching latest Docker Compose version..."
-        if command -v jq &>/dev/null; then
-            compose_version=$(curl -sfL --max-time 10 https://api.github.com/repos/docker/compose/releases/latest 2>/dev/null | jq -r '.tag_name' 2>/dev/null)
-        else
-            compose_version=$(curl -sfL --max-time 10 https://api.github.com/repos/docker/compose/releases/latest 2>/dev/null | grep -oP '"tag_name":\s*"\K[^"]+' | head -1)
-        fi
-        
-        if [[ -n "$compose_version" ]]; then
-            compose_url="https://github.com/docker/compose/releases/download/${compose_version}/docker-compose-linux-x86_64"
-            info "Latest Docker Compose: $compose_version"
-        else
-            # Fallback: Use known stable version
-            warn "Could not fetch latest version, using fallback v5.0.1"
-            compose_url="https://github.com/docker/compose/releases/download/v5.0.1/docker-compose-linux-x86_64"
-        fi
-        
-        if curl -fL --max-time 120 -o "$DOCKER_CONFIG/cli-plugins/docker-compose" "$compose_url" 2>/dev/null; then
+        if github_download "docker/compose" "docker-compose-linux-x86_64$" \
+            "$DOCKER_CONFIG/cli-plugins/docker-compose" \
+            "https://github.com/docker/compose/releases/download/v5.0.1/docker-compose-linux-x86_64"; then
             chmod +x "$DOCKER_CONFIG/cli-plugins/docker-compose"
-            success "Docker Compose downloaded"
+            success "Docker Compose installed"
         else
             warn "Failed to download Docker Compose"
             info "Manual download: https://github.com/docker/compose/releases"
         fi
     fi
     
-    if [[ -x "$DOCKER_CONFIG/cli-plugins/docker-compose" ]]; then
-        info "Docker Compose installed: $(docker compose version 2>/dev/null || echo 'verify after reboot')"
-    else
-        warn "Docker Compose not available"
-    fi
-    
-    # Corepack setup
-    if command -v npm >/dev/null; then
-        run_sudo npm install -g corepack 2>/dev/null || true
-        run_sudo corepack enable 2>/dev/null || true
-        info "Corepack enabled. After reboot verify:"
-        info "  npm --version && yarn --version && pnpm --version"
-    fi
-    
     step_complete "Docker configured"
-}
-
-# ==============================================================================
-# 19. LM Studio
-# ==============================================================================
-setup_lmstudio() {
-    log "Setting up LM Studio..."
-    run_sudo dnf install -y fuse-libs
-    
-    local LMS=$(find ~/Downloads -maxdepth 1 -name "LM-Studio*.AppImage" 2>/dev/null | head -1)
-    [[ -z "$LMS" ]] && confirm "Download LM Studio?" "N" && { wget -P ~/Downloads "https://releases.lmstudio.ai/linux/x64/latest/LM-Studio-latest-x64.AppImage"; LMS=$(find ~/Downloads -name "LM-Studio*.AppImage" | head -1); }
-    
-    if [[ -n "$LMS" ]]; then
-        mkdir -p ~/Applications ~/.local/share/applications ~/.local/share/icons/hicolor/512x512/apps
-        mv "$LMS" ~/Applications/ 2>/dev/null || true
-        chmod +x ~/Applications/LM-Studio*.AppImage
-        local APP=$(ls ~/Applications/LM-Studio*.AppImage 2>/dev/null | head -1)
-        
-        # Extract icon
-        "$APP" --appimage-extract 2>/dev/null || true
-        [[ -d squashfs-root ]] && { find squashfs-root -name "*.png" -exec cp {} ~/.local/share/icons/hicolor/512x512/apps/lmstudio.png \; 2>/dev/null || true; rm -rf squashfs-root; }
-        
-        cat > ~/.local/share/applications/lmstudio.desktop <<EOF
-[Desktop Entry]
-Name=LM Studio
-Comment=Local LLM runner
-Type=Application
-Exec=$APP --no-sandbox
-Icon=lmstudio
-Terminal=false
-Categories=Development;AI;
-EOF
-        update-desktop-database ~/.local/share/applications 2>/dev/null || true
-        gtk-update-icon-cache ~/.local/share/icons/hicolor 2>/dev/null || true
-        success "LM Studio installed"
-        
-        info "LM Studio Model Settings (for optimal performance):"
-        info "  • Context Length: 6144-32768 (based on VRAM)"
-        info "  • GPU Offload: Max layers"
-        info "  • CPU Thread Pool: 6"
-        info "  • Evaluation Batch Size: 512"
-        info "  • Offload KV Cache to GPU: On"
-        info "  • Keep Model in Memory: On"
-        info "  • Flash Attention: On"
-        info "  • K/V Cache Quantization: F16"
-    fi
-    step_complete "LM Studio configured"
-}
-
-# ==============================================================================
-# 20. Gemini CLI
-# ==============================================================================
-setup_gemini() {
-    log "Installing Gemini CLI..."
-    command -v npm >/dev/null && run_sudo npm install -g @google/gemini-cli
-    step_complete "Gemini CLI installed"
-}
-
-# ==============================================================================
-# 21. Winboat (Docker-based Windows apps runner)
-# ==============================================================================
-setup_winboat() {
-    log "Installing Winboat..."
-    
-    local winboat_url=""
-    local api_response
-    
-    # Fetch from GitHub API (the only reliable method)
-    log "Fetching Winboat release info from GitHub API..."
-    api_response=$(curl -sfL --max-time 10 https://api.github.com/repos/TibixDev/winboat/releases/latest 2>/dev/null)
-    
-    if [[ -n "$api_response" ]]; then
-        if command -v jq &>/dev/null; then
-            # jq: filter for x86_64 RPM, exclude debug/src/arm variants
-            winboat_url=$(echo "$api_response" | jq -r '
-                .assets[] 
-                | select(.name | test("x86_64") and test("\\.rpm$"))
-                | select(.name | test("debug|src|aarch64|arm"; "i") | not)
-                | .browser_download_url
-            ' 2>/dev/null | head -1)
-        else
-            # grep fallback: x86_64 RPM, exclude debug/src/arm
-            winboat_url=$(echo "$api_response" | grep -oP '"browser_download_url":\s*"\K[^"]*x86_64[^"]*\.rpm' | grep -v -iE 'debug|src|aarch64|arm' | head -1)
-        fi
-    fi
-    
-    # Download and install
-    if [[ -n "$winboat_url" ]]; then
-        info "Downloading from: $winboat_url"
-        if curl -fL --max-time 120 -o /tmp/winboat-latest.rpm "$winboat_url" 2>/dev/null; then
-            run_sudo dnf install -y /tmp/winboat-latest.rpm || warn "DNF install failed"
-            rm -f /tmp/winboat-latest.rpm
-            
-            if command -v winboat &>/dev/null; then
-                success "Winboat installed successfully"
-            else
-                warn "Winboat binary not found after install - check manually"
-            fi
-        else
-            warn "Failed to download Winboat"
-        fi
-    else
-        # Clean failure - API unavailable or rate-limited, direct user to manual install
-        warn "GitHub API unavailable or no matching RPM found"
-        info "Manual install: https://github.com/TibixDev/winboat/releases"
-    fi
-    
-    step_complete "Winboat configured"
 }
 
 # ==============================================================================
@@ -1290,7 +1144,6 @@ show_summary() {
 cleanup() {
     log "Cleaning up..."
     rm -f msttcore-fonts-installer*.rpm FiraCode.zip 2>/dev/null || true
-    rm -f /tmp/winboat-latest.rpm 2>/dev/null || true
     rm -rf squashfs-root 2>/dev/null || true
     confirm "Clear DNF cache?" "N" && sudo dnf clean all
 }
@@ -1308,7 +1161,7 @@ main() {
     fi
     
     echo -e "${GREEN}========================================${NC}"
-    echo -e "${GREEN}   Fedora 43 Post-Install Setup v${SCRIPT_VERSION}${NC}"
+    echo -e "${GREEN}   Fedora 44 Post-Install Setup v${SCRIPT_VERSION}${NC}"
     echo -e "${GREEN}========================================${NC}"
     info "Started at $(date)"
     info "Log file: $LOG_FILE"
@@ -1348,24 +1201,19 @@ main() {
         "setup_gnome:GNOME Tools"
         "setup_packages:Essential Packages"
         "setup_dev:Development Tools"
-        "setup_mangohud:MangoHud Config"
         "setup_antigravity:Antigravity"
-        "setup_office:OnlyOffice"
         "setup_flatpaks:Flatpak Apps"
         "setup_docker:Docker Setup"
-        "setup_lmstudio:LM Studio"
-        "setup_gemini:Gemini CLI"
-        "setup_winboat:Winboat"
         "setup_kvm:KVM/QEMU Virtualization"
     )
     
     # Define profile step filters
     local -A PROFILE_STEPS
     PROFILE_STEPS[minimal]="setup_dnf setup_fonts setup_shell"
-    PROFILE_STEPS[dev]="setup_dnf setup_fonts setup_shell setup_dev setup_docker setup_antigravity setup_gemini setup_winboat setup_kvm"
-    PROFILE_STEPS[gaming]="setup_dnf setup_fonts setup_shell setup_drivers setup_packages setup_mangohud setup_flatpaks setup_browser_multimedia"
-    PROFILE_STEPS[workstation]="setup_dnf setup_dns setup_fonts setup_shell setup_dev setup_docker setup_antigravity setup_office setup_kvm setup_gemini"
-    PROFILE_STEPS[creator]="setup_dnf setup_fonts setup_shell setup_drivers setup_browser_multimedia setup_copr setup_packages setup_mangohud setup_flatpaks setup_lmstudio setup_gemini"
+    PROFILE_STEPS[dev]="setup_dnf setup_fonts setup_shell setup_dev setup_docker setup_antigravity setup_kvm"
+    PROFILE_STEPS[gaming]="setup_dnf setup_fonts setup_shell setup_drivers setup_packages setup_flatpaks setup_browser_multimedia"
+    PROFILE_STEPS[workstation]="setup_dnf setup_dns setup_fonts setup_shell setup_dev setup_docker setup_antigravity setup_kvm"
+    PROFILE_STEPS[creator]="setup_dnf setup_fonts setup_shell setup_drivers setup_browser_multimedia setup_copr setup_packages setup_flatpaks"
     PROFILE_STEPS[full]=""  # Empty means all steps
     
     info "Profile: $PROFILE"
