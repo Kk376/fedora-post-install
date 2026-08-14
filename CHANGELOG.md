@@ -2,7 +2,40 @@
 
 All notable changes to this project will be documented in this file.
 
-This project follows semantic versioning: **MAJOR.MINOR.PATCH**
+Follows semantic versioning: MAJOR.MINOR.PATCH
+
+---
+
+## [v5.0.0] – 2026-08-14
+
+### Added
+
+- Updated for Fedora 44
+- Antigravity CLI in dev tools (replaces discontinued Gemini CLI)
+- MangoHud config folded into the packages step (auto-configures if mangohud is present)
+- Reusable `github_download()` helper for GitHub release fetches
+
+### Removed
+
+- Gemini CLI is discontinued; replaced by Antigravity CLI in dev tools
+- OnlyOffice step (LibreOffice ships with Fedora)
+- Winboat step (too niche)
+- LM Studio step (AppImage wrangling; use Ollama instead)
+- MangoHud config as a standalone step (moved into packages)
+- preload from COPR (negligible benefit on SSDs)
+- ani-cli from COPR (too niche)
+- Yaru theme prompt (Ubuntu theme on Fedora is uncommon)
+
+### Improved
+
+- Profiles updated to match the leaner step list
+- Deduplicated gsettings calls in no-sleep setup
+- Simplified Docker service management (removed redundant enable/start calls)
+- ccache config no longer appends duplicate lines on re-run
+- Corepack moved from Docker step to dev tools where it belongs
+- Fixed `nvim` package name to `neovim`
+- Simplified confirm prompt function
+- Cleaned up script header
 
 ---
 
@@ -10,35 +43,26 @@ This project follows semantic versioning: **MAJOR.MINOR.PATCH**
 
 ### Added
 
-- **New profiles** – `workstation` (Dev + Virtualization + Office) and `creator` (Gaming + Multimedia + AI tools)
-- **Emergency rollback system** – Automatic service stopping and recovery guidance on script failure
-- **Disk space protection** – Checks for minimum 20GB before installation, with interactive warning
-- **KVM/QEMU Virtualization** – Complete setup module with modern socket activation (`virtqemud.socket`)
-- **Atomic DNF operations** – Version pinning (`best=True`) and safer repository installation
-- **Enhanced safety** – Network checks, disk space validation, emergency traps
+- KVM/QEMU virtualization module with modern socket activation (`virtqemud.socket`)
+- `workstation` profile (Dev + Virtualization + Office) and `creator` profile (Gaming + Multimedia + AI)
+- Rollback on failure: stops services, preserves state, points to logs
+- Disk space check before starting (warns if <20GB free)
+- Version pinning via `best=True` in DNF operations
+- Network validation before remote operations
 
 ### Improved
 
-- **DNF configuration** – Added `best=True` for version pinning, atomic RPM Fusion installation
-- **Profile system** – More logical segmentation with workstation/creator profiles
-- **Error handling** – State file preserved on error for resumption
-- **User experience** – Better progress tracking and validation messages
-- **Virtualization setup** – Modern libvirt socket activation instead of legacy service
-- **Documentation** – Updated README with new features and troubleshooting guide
+- DNF config uses `best=True` and atomic RPM Fusion installation
+- Better error handling with state preservation for resumption
+- Modern libvirt socket activation instead of legacy service
+- Documentation updated for new features and troubleshooting
 
 ### Fixed
 
-- **Dry-run state counting** – Progress counter now works correctly in dry-run mode
-- **Service management** – Proper stopping of services during emergency rollback
-- **Permission handling** – Better user group management for Docker and libvirt
-- **Profile step filters** – Correct step inclusion for new profiles
-
-### Security
-
-- **Rollback protection** – Stops potentially dangerous services on failure
-- **Resource validation** – Prevents installation on low disk space
-- **Network dependency** – Validates internet before remote operations
-- **Service isolation** – Proper firewall and NetworkManager configuration
+- Progress counter in dry-run mode
+- Service management during emergency rollback
+- User group handling for Docker and libvirt
+- Profile step filters for new profiles
 
 ---
 
@@ -46,22 +70,21 @@ This project follows semantic versioning: **MAJOR.MINOR.PATCH**
 
 ### Added
 
-- **Profile system** – `--profile=minimal|dev|gaming|full` for targeted installations
-- **State file** – `~/.config/fedora-setup/state.txt` tracks completed steps for idempotency
-- **`--force` flag** – Re-run already-completed steps
-- **DNS provider choice** – Google, Cloudflare, or skip (default: skip)
-- **TLP opt-in** – User choice with warning about GNOME power profiles
-- **RPM Fusion validation** – Warns before multimedia if not installed
-- **Dynamic step counting** – TOTAL_STEPS calculated based on profile
+- Profile system: `--profile=minimal|dev|gaming|full`
+- State file (`~/.config/fedora-setup/state.txt`) for idempotency
+- `--force` flag to re-run completed steps
+- DNS provider choice (Google, Cloudflare, or skip)
+- TLP opt-in with GNOME power profiles warning
+- RPM Fusion validation before multimedia step
+- Dynamic step counting based on profile
 
 ### Improved
 
-- **NVIDIA Secure Boot flow** – `akmods --force` + `modinfo` check before MOK enrollment
-- **DNF config** – Uses `# BEGIN/END fedora-setup` block markers for true idempotency
-- **GPU detection** – More specific pattern (`VGA|3D|Display`) to avoid false positives
-- **Dry-run mode** – DNS step skipped, progress counters only increment in real runs
-- **Restore safety** – State file reset after backup restore
-- **Cleanup** – Only runs for `full` profile
+- NVIDIA Secure Boot flow: `akmods --force` + `modinfo` check before MOK enrollment
+- DNF config uses `# BEGIN/END fedora-setup` block markers for clean idempotency
+- More specific GPU detection patterns (VGA|3D|Display)
+- Dry-run skips DNS step; progress counters only increment in real runs
+- State file reset after backup restore
 
 ### Removed
 
@@ -74,7 +97,7 @@ This project follows semantic versioning: **MAJOR.MINOR.PATCH**
 
 ### Added
 
-- Explicitly enabled `fedora-cisco-openh264` repository to ensure OpenH264 availability
+- Enabled `fedora-cisco-openh264` repository for OpenH264 availability
 
 ---
 
@@ -82,7 +105,7 @@ This project follows semantic versioning: **MAJOR.MINOR.PATCH**
 
 ### Fixed
 
-- Fix typo: keepcache in dnf.conf
+- Typo in `keepcache` in dnf.conf
 
 ---
 
@@ -90,24 +113,22 @@ This project follows semantic versioning: **MAJOR.MINOR.PATCH**
 
 ### Added
 
-- Backup functionality for existing system and user configuration files before modification
-- Restore mode to roll back changes using saved backups
-- Dry-run mode to preview all actions without making any system changes
-- Logging to file for easier debugging and auditing
-- Post-step validation to verify successful configuration after each major step
-- Version and state checks to avoid unnecessary re-installation or overwrites
+- Backup/restore for config files before modification
+- Dry-run mode to preview actions without touching the system
+- Logging to file for debugging
+- Post-step validation for each major step
+- Version and state checks to avoid redundant work
 
 ### Improved
 
-- Overall script safety and predictability
+- Script safety and predictability
 - Idempotency of installation steps
-- Error visibility and troubleshooting experience
-- Script usability for advanced and cautious users
+- Error visibility and troubleshooting
 
 ### Notes
 
-- v2.0 is a **breaking change** internally due to new execution flow
-- Existing users are recommended to review dry-run output before upgrading
+- v2.0 is a breaking change internally due to new execution flow
+- Review dry-run output before upgrading from v1.x
 
 ---
 
@@ -115,10 +136,10 @@ This project follows semantic versioning: **MAJOR.MINOR.PATCH**
 
 ### Added
 
-- Interactive Fedora 43 post-install automation script
-- DNF optimizations and repository setup
-- Power management (TLP) with boot-time fix
-- GPU driver detection (Intel / AMD / NVIDIA with Secure Boot support)
+- Interactive Fedora post-install script
+- DNF optimization and repository setup
+- TLP power management with boot-time fix
+- GPU driver detection (Intel / AMD / NVIDIA with Secure Boot)
 - ZSH + Powerlevel10k setup
-- Multimedia, gaming, and development environment configuration
-- Cloudflare Warp, Docker, Antigravity, LM Studio integration
+- Multimedia, gaming, and dev environment configuration
+- Cloudflare Warp, Docker, Antigravity integration

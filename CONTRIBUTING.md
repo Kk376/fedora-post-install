@@ -1,49 +1,40 @@
-# Contributing to Fedora Post-Install Setup
+# Contributing
 
-Thank you for considering contributing to this project!
+## Reporting Issues
 
-## How to Contribute
-
-### 1. Report Issues
 - Check if the issue already exists
 - Include your Fedora version and hardware details
-- Provide relevant log files if possible
+- Attach relevant log output if you have it
 
-### 2. Suggest Features
-- Explain the use case
-- Consider if it fits the project scope
-- Suggest implementation approach
+## Suggesting Features
 
-### 3. Submit Pull Requests
-1. Fork the repository
+- Explain what you're trying to do and why
+- Check if it fits the scope of a post-install script
+- If you have an implementation idea, describe it
+
+## Pull Requests
+
+1. Fork the repo
 2. Create a feature branch
 3. Make your changes
-4. Test thoroughly
-5. Update documentation
-6. Submit PR with clear description
+4. Test in a VM using `--dry-run` first, then for real on a clean Fedora install
+5. Update docs if needed
+6. Submit a PR with a clear description
 
-## Development Guidelines
+## Code Style
 
-### Code Style
-- Use consistent indentation (2 spaces)
-- Add comments for complex logic
+- 2-space indentation
+- Comments for non-obvious logic (skip the obvious)
 - Follow existing function patterns
-- Validate all user inputs
+- Validate user inputs
 
-### Safety First
-- Never remove existing safety features
-- Always validate before making changes
-- Include proper error handling
+## Safety Rules
+
+- Don't remove existing safety checks
+- Include error handling
 - Maintain backward compatibility
-
-### Testing
-- Test in a VM first
-- Use `--dry-run` mode for development
 - Test different profiles
-- Verify on clean Fedora installs
 
 ## Questions?
 
-Open an issue for discussion before major changes.
-
-Thanks for helping make Fedora better!
+Open an issue before making large changes.

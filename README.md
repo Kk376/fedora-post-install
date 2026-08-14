@@ -1,281 +1,173 @@
-# Fedora 43 Post-Install Setup Script
+# Fedora 44 Post-Install Setup Script
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-A **fully interactive, modular, and safe** post-installation automation script for  
-**Fedora 43 Workstation (GNOME)**.
+An interactive post-installation script for Fedora 44 Workstation (GNOME).
 
-This script is built from **years of real-world Fedora usage**, focusing on:
-
-- Performance & stability
-- Battery life (laptops)
-- Proper multimedia & hardware acceleration
-- Developer tooling
-- Gaming (Steam, Proton, MangoHud)
-- Secure NVIDIA driver handling (including Secure Boot)
-- GNOME usability
-- ZSH + Powerlevel10k
-- Cloudflare Warp
-- Docker & modern dev workflows
-- Local AI tooling (LM Studio, Gemini CLI)
-- **KVM/QEMU virtualization** (new in v4.0)
+Built from years of actual Fedora usage, covering the things I find myself setting up on every fresh install: driver detection, multimedia codecs, dev tools, gaming, shell customization, Docker, virtualization, and a handful of optional extras like Cloudflare Warp.
 
 ---
 
-## Key Features
+## Features
 
-- 🔹 **Fully interactive** – every step asks before running
-- 🔹 **Safe by design** – disk space checks, network validation, emergency rollback
-- 🔹 **Hardware-aware**
-  - Intel / AMD / NVIDIA GPU detection
-  - Hybrid (Optimus) awareness
-  - CPU virtualization detection (VT-x/AMD-V)
-- 🔹 **Secure Boot–aware NVIDIA setup**
-- 🔹 **Idempotent**
-  - State file tracks completed steps
-  - Resume after interruption
-  - `--force` to re-run steps
-- 🔹 **Profile-based installation** (6 profiles)
-- 🔹 **Emergency rollback** on errors
-- 🔹 **Clean logging & progress tracking**
-- 🔹 **Modular** – each task is isolated and readable
+- **Interactive** — every step asks before running; nothing happens behind your back
+- **Hardware-aware** — detects Intel / AMD / NVIDIA GPUs, hybrid Optimus setups, and CPU virtualization support
+- **Secure Boot–aware NVIDIA setup** — builds kernel modules, generates keys, and walks you through MOK enrollment
+- **Idempotent** — state file tracks what's done; you can interrupt and pick up where you left off, or `--force` to re-run
+- **Profile-based** — six profiles so you only install what you actually need
+- **Dry-run mode** — preview everything without touching the system
+- **Rollback on failure** — stops services and preserves state if something goes wrong
+- **Backup and restore** — backs up config files before modifying them
 
 ---
 
-## What's New in v4.0.0
+## What's New in v5.0.0
 
-### New Features
-
-- **KVM/QEMU Virtualization** – Complete Type 1 hypervisor setup with modern socket activation
-- **New Profiles** – `workstation` and `creator` for specialized workflows
-- **Emergency Rollback** – Automatic service stopping and recovery guidance on failure
-- **Disk Space Protection** – Warns if <20GB available before installation
-- **Atomic DNF Operations** – Version pinning (`best=True`) for predictable updates
-
-### Improved Safety
-
-- Network validation before remote operations
-- Better error recovery with state preservation
-- Service isolation (Docker, libvirt, TLP)
-- Proper user group management
+- Updated for Fedora 44
+- Replaced discontinued Gemini CLI with Antigravity CLI (folded into dev tools)
+- Removed rarely-used steps: OnlyOffice, Winboat, LM Studio, MangoHud config (standalone), preload, ani-cli
+- MangoHud config folded into the packages step (auto-configures if mangohud is installed)
+- Extracted reusable `github_download()` helper for all GitHub release fetches
+- Profiles updated to match the leaner step list
 
 ---
 
 ## Usage
 
 ```bash
-# Basic usage (full profile, interactive)
+# Full profile, interactive
 ./setup.sh
 
 # Preview without changes
 ./setup.sh --dry-run
 
-# Minimal install (DNF, fonts, shell only)
+# Pick a profile
 ./setup.sh --profile=minimal
-
-# Developer setup
 ./setup.sh --profile=dev
-
-# Gaming setup
 ./setup.sh --profile=gaming
-
-# Workstation (Dev + Office + Virtualization)
 ./setup.sh --profile=workstation
-
-# Content Creator (Gaming + Multimedia + AI tools)
 ./setup.sh --profile=creator
 
-# Re-run completed steps
+# Re-run already-completed steps
 ./setup.sh --force
 ```
 
-### Available Profiles
+### Profiles
 
-| Profile       | Steps Included                                            |
-| ------------- | --------------------------------------------------------- |
-| `minimal`     | DNF, fonts, shell                                         |
-| `dev`         | Minimal + dev tools, Docker, Antigravity, Gemini CLI, KVM |
-| `gaming`      | Minimal + drivers, packages, MangoHud, Flatpaks           |
-| `workstation` | Dev + DNS, Office, KVM/QEMU virtualization                |
-| `creator`     | Gaming + Multimedia, COPR tools, LM Studio, Gemini CLI    |
-| `full`        | All 22 steps (default)                                    |
-
----
-
-## Who This Script Is For
-
-✅ Fedora power users  
-✅ Developers  
-✅ Gamers  
-✅ Content creators & AI enthusiasts  
-✅ Laptop users who care about battery life  
-✅ Virtualization / homelab users  
-❌ Beginners who don't want to read prompts  
-❌ Blind "one-click" installers
-
-This script **assumes you understand Fedora** and want a **clean, correct setup**, not magic.
+| Profile       | What it installs                                    |
+| ------------- | --------------------------------------------------- |
+| `minimal`     | DNF config, fonts, shell                            |
+| `dev`         | Minimal + dev tools, Docker, Antigravity, KVM       |
+| `gaming`      | Minimal + GPU drivers, packages, Flatpaks           |
+| `workstation` | Dev + DNS, KVM/QEMU                                |
+| `creator`     | Gaming + multimedia, COPR tools                    |
+| `full`        | All steps (default)                                 |
 
 ---
 
-## Supported System
+## Requirements
 
-- **OS:** Fedora 43 Workstation
+- **OS:** Fedora 44 Workstation
 - **Desktop:** GNOME
-- **Shell:** Bash (script), ZSH (optional install)
-- **Tested on:** Intel, AMD, NVIDIA systems (desktop & laptop)
+- **Disk:** At least 20GB free (varies by profile)
+- **Tested on:** Intel, AMD, and NVIDIA systems, both desktop and laptop
 
 ---
 
-## Important Warnings
+## Warnings
 
-- Some steps **require reboot** (drivers, Docker, Secure Boot, KVM)
-- NVIDIA users **must read Secure Boot prompts carefully**
-- ZSH default shell change requires **logout/login**
-- Docker/libvirt group changes require **reboot or re-login**
-- LM Studio AppImage must be available in `~/Downloads` (optional auto-download)
-- Minimum **20GB disk space** recommended
+- Some steps require a reboot (GPU drivers, Docker group, Secure Boot, KVM)
+- NVIDIA users: read the Secure Boot prompts carefully
+- ZSH default shell change needs a logout/login
+- Docker and libvirt group changes need a reboot or re-login
 
 ---
 
-## What the Script Installs & Configures
+## What Gets Installed
 
-### Core System
+### Core
 
-- DNF optimizations (parallel downloads, version pinning, fastest mirror)
-- RPM Fusion & Flathub
-- DNS (optional: Google/Cloudflare)
-- No-random-sleep (GDM + user)
-- System fonts + Nerd Fonts
+DNF optimization (parallel downloads, fastest mirror, version pinning), RPM Fusion, Flathub, optional DNS override (Google or Cloudflare), disable auto-sleep (GDM + user), system fonts and FiraCode Nerd Font.
 
-### Power & Performance
+### Shell
 
-- TLP (optional, with GNOME PPD warning)
-- preload
-- ccache (50GB, compressed)
-- tuned virtual-host profile (for KVM)
+ZSH, Oh My Zsh, Powerlevel10k, zsh-autosuggestions, zsh-syntax-highlighting, eza/bat aliases.
 
-### Shell & UX
+### Power
 
-- ZSH + Oh My Zsh + Powerlevel10k
-- zsh-autosuggestions / zsh-syntax-highlighting
-- eza, bat aliases
+TLP (optional, warns about GNOME power profiles conflict), ccache (50GB compressed), tuned virtual-host profile for KVM.
 
 ### Multimedia & Browsers
 
-- Brave Browser
-- FFmpeg (freeworld)
-- VA-API / NVENC support
-- OpenH264
+Brave Browser, FFmpeg freeworld, VA-API / NVENC support, OpenH264.
 
 ### GPU Drivers
 
-- Intel media driver
-- AMD freeworld VA/VDPAU
-- NVIDIA proprietary drivers
-  - `akmods --force` before MOK enrollment
-  - Secure Boot key generation
-  - Interactive MOK enrollment guidance
+Intel media driver, AMD freeworld VA/VDPAU, NVIDIA proprietary (akmods, Secure Boot key enrollment with guided walkthrough).
 
-### Development
+### Dev Tools
 
-- GCC / Clang / LLVM
-- Java, Node.js, Python
-- Docker + Corepack
-- Rust (optional)
-- Android tools
-- Debuggers, profilers, build systems
+GCC, Clang, LLVM, Java, Node.js, Python, Docker + Docker Compose, Corepack, Antigravity CLI, Rust (optional), Android tools, debuggers, build systems.
 
 ### Gaming
 
-- Steam + H.264 unlock
-- MangoHud (preconfigured)
-- ProtonPlus
+Steam (with H.264 unlock), MangoHud (preconfigured), ProtonPlus.
 
-### Cloud & AI
+### Cloud
 
-- Cloudflare Warp
-- LM Studio (AppImage integration)
-- Gemini CLI
+Cloudflare Warp.
 
-### Virtualization (New!)
+### Virtualization
 
-- KVM/QEMU with modern socket activation
-- libvirt, virt-manager, virt-install
-- VirtIO drivers for Windows VMs
-- Firewall and network configuration
-- Storage pool setup guidance
+KVM/QEMU, libvirt with socket activation, virt-manager, VirtIO drivers for Windows VMs, firewall and storage pool setup.
 
-### GNOME Tools
+### GNOME
 
-- GNOME Tweaks
-- Extension Manager
-- Extension recommendations (manual install)
+GNOME Tweaks, Extension Manager, extension recommendations.
 
 ---
 
 ## Troubleshooting
 
-### Script failed mid-installation
+**Script failed mid-run?**
+Re-run it. The state file tracks progress, so it picks up from the last successful step.
 
-The script preserves state on failure. Simply re-run it to continue from the last successful step.
+**Low disk space warning?**
+Free up space or acknowledge the prompt to continue anyway.
 
-### Low disk space warning
-
-Ensure at least 20GB free space. The script will warn but allow you to continue.
-
-### Docker not working after install
-
-Reboot or re-login to apply group membership changes:
-
+**Docker not working after install?**
+Reboot to apply group membership, then test:
 ```bash
-sudo systemctl reboot
 docker run --rm hello-world
 ```
 
-### KVM/QEMU permission denied
-
-After installation, run the post-reboot commands shown by the script, or:
-
+**KVM permission denied?**
+Run the post-reboot commands the script shows you, or:
 ```bash
 sudo usermod -aG libvirt $USER
 # Then reboot
 ```
 
-### NVIDIA drivers not loading
-
-Complete the MOK enrollment during boot (blue MOK Manager screen).
+**NVIDIA drivers not loading?**
+Complete MOK enrollment on reboot (the blue "MOK Manager" screen).
 
 ---
 
-## How to Use
-
-### 1️⃣ Clone the repository
+## Getting Started
 
 ```bash
-git clone https://github.com/Kk376/fedora-43-post-install.git
-cd fedora-43-post-install
-```
-
-### 2️⃣ Make the script executable
-
-```bash
+git clone https://github.com/Kk376/fedora-post-install.git
+cd fedora-post-install
 chmod +x setup.sh
-```
-
-### 3️⃣ Run the script
-
-```bash
 ./setup.sh
 ```
 
-You will be prompted before each major step.
+Each step prompts before running.
 
 ---
 
-Built and maintained by **Kushagra Kumar**.
-
----
+Built and maintained by Kushagra Kumar.
 
 ## License
 
-This project is licensed under the **MIT License** – see the [LICENSE](LICENSE) file for details.
+MIT — see [LICENSE](LICENSE).
