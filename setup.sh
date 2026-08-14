@@ -153,6 +153,10 @@ github_download() {
 backup_file() {
     local file="$1"
     if [[ -f "$file" ]]; then
+        if $DRY_RUN; then
+            dry "Backup: $file → $BACKUP_DIR/$(basename "$file").backup"
+            return 0
+        fi
         mkdir -p "$BACKUP_DIR"
         local backup_name=$(basename "$file").backup
         cp "$file" "$BACKUP_DIR/$backup_name"
@@ -218,6 +222,9 @@ validate_step() {
     local step_name="$1"
     local check_cmd="$2"
     
+    if $DRY_RUN; then
+        return 0
+    fi
     if eval "$check_cmd" &>/dev/null; then
         success "Validated: $step_name"
         return 0
@@ -258,8 +265,13 @@ reset_state() {
 confirm() {
     local prompt="$1" default="${2:-N}" yn
     if $DRY_RUN; then
-        dry "Prompt: $prompt (auto-yes in dry-run)"
-        return 0
+        if [[ "$default" == "Y" ]]; then
+            dry "Prompt: $prompt (auto-yes in dry-run)"
+            return 0
+        else
+            dry "Prompt: $prompt (auto-no in dry-run)"
+            return 1
+        fi
     fi
     if [[ "$default" == "Y" ]]; then
         read -p "$prompt (Y/n): " -n 1 -r yn
@@ -383,9 +395,12 @@ EOF
     
     # Atomic operation: Install RPM Fusion repos together
     log "Enabling RPM Fusion & Flathub (atomic operation)..."
+    local fedora_ver
+    fedora_ver=$(rpm -E %fedora 2>/dev/null || echo "44")
+    [[ -z "$fedora_ver" || "$fedora_ver" == "%fedora" ]] && fedora_ver="44"
     run_sudo dnf install -y --setopt=best=True \
-        https://mirrors.rpmfusion.org/free/fedora/rpmfusion-free-release-$(rpm -E %fedora).noarch.rpm \
-        https://mirrors.rpmfusion.org/nonfree/fedora/rpmfusion-nonfree-release-$(rpm -E %fedora).noarch.rpm
+        "https://mirrors.rpmfusion.org/free/fedora/rpmfusion-free-release-${fedora_ver}.noarch.rpm" \
+        "https://mirrors.rpmfusion.org/nonfree/fedora/rpmfusion-nonfree-release-${fedora_ver}.noarch.rpm"
     run flatpak remote-add --if-not-exists flathub https://flathub.org/repo/flathub.flatpakrepo 2>/dev/null || warn "Flathub already configured or failed"
     
     # System update with version pinning
@@ -505,7 +520,7 @@ setup_nosleep() {
     for entry in "${keys[@]}"; do
         local key=${entry%% *} val=${entry#* }
         run_sudo -u gdm dbus-run-session gsettings set org.gnome.settings-daemon.plugins.power "$key" "$val" 2>/dev/null || true
-        gsettings set org.gnome.settings-daemon.plugins.power "$key" "$val" 2>/dev/null || true
+        run gsettings set org.gnome.settings-daemon.plugins.power "$key" "$val" 2>/dev/null || true
     done
 
     step_complete "No-sleep configured"
@@ -698,22 +713,31 @@ setup_fonts() {
         google-noto-sans-fonts google-noto-serif-fonts google-noto-mono-fonts google-carlito-fonts google-caladea-fonts \
         curl cabextract xorg-x11-font-utils fontconfig
     
-    curl -sLO https://downloads.sourceforge.net/project/mscorefonts2/rpms/msttcore-fonts-installer-2.6-1.noarch.rpm
-    run_sudo rpm -ivh --nodigest --nofiledigest msttcore-fonts-installer-2.6-1.noarch.rpm 2>/dev/null || true
-    rm -f msttcore-fonts-installer-2.6-1.noarch.rpm
-    
-    log "Downloading FiraCode Nerd Font..."
-    mkdir -p ~/.local/share/fonts
-    if github_download "ryanoasis/nerd-fonts" "FiraCode\\.zip" "/tmp/FiraCode.zip" \
-        "https://github.com/ryanoasis/nerd-fonts/releases/latest/download/FiraCode.zip"; then
-        unzip -oq /tmp/FiraCode.zip -d ~/.local/share/fonts/ && rm -f /tmp/FiraCode.zip
-        success "FiraCode Nerd Font installed"
+    if ! $DRY_RUN; then
+        curl -sLO https://downloads.sourceforge.net/project/mscorefonts2/rpms/msttcore-fonts-installer-2.6-1.noarch.rpm
+        run_sudo rpm -ivh --nodigest --nofiledigest msttcore-fonts-installer-2.6-1.noarch.rpm 2>/dev/null || true
+        rm -f msttcore-fonts-installer-2.6-1.noarch.rpm
     else
-        warn "Failed to download FiraCode Nerd Font"
-        info "Manual download: https://github.com/ryanoasis/nerd-fonts/releases"
+        dry "Install msttcore-fonts-installer rpm"
     fi
     
-    fc-cache -fv
+    log "Downloading FiraCode Nerd Font..."
+    if ! $DRY_RUN; then
+        mkdir -p ~/.local/share/fonts
+        if github_download "ryanoasis/nerd-fonts" "FiraCode\\.zip" "/tmp/FiraCode.zip" \
+            "https://github.com/ryanoasis/nerd-fonts/releases/latest/download/FiraCode.zip"; then
+            unzip -oq /tmp/FiraCode.zip -d ~/.local/share/fonts/ && rm -f /tmp/FiraCode.zip
+            success "FiraCode Nerd Font installed"
+        else
+            warn "Failed to download FiraCode Nerd Font"
+            info "Manual download: https://github.com/ryanoasis/nerd-fonts/releases"
+        fi
+        fc-cache -fv
+    else
+        dry "Download and install FiraCode Nerd Font"
+        dry "fc-cache -fv"
+    fi
+    
     step_complete "Fonts installed"
 }
 
@@ -727,10 +751,14 @@ setup_warp() {
     run_sudo dnf install -y cloudflare-warp
     
     # Only register if not already registered
-    if ! warp-cli account 2>/dev/null | grep -q "Account type"; then
-        check_network && warp-cli registration new 2>/dev/null || warn "Run 'warp-cli registration new' manually"
+    if ! $DRY_RUN; then
+        if ! warp-cli account 2>/dev/null | grep -q "Account type"; then
+            check_network && warp-cli registration new 2>/dev/null || warn "Run 'warp-cli registration new' manually"
+        else
+            info "Warp already registered"
+        fi
     else
-        info "Warp already registered"
+        dry "Register warp-cli account if needed"
     fi
     step_complete "Warp installed"
 }
@@ -741,7 +769,7 @@ setup_warp() {
 setup_gnome() {
     log "Installing GNOME tools..."
     run_sudo dnf install -y gnome-tweaks
-    flatpak install -y flathub com.mattjakeman.ExtensionManager 2>/dev/null || true
+    run flatpak install -y flathub com.mattjakeman.ExtensionManager 2>/dev/null || true
     
     info "Recommended GNOME Extensions (install via Extension Manager):"
     info "  • Blur My Shell"
@@ -771,15 +799,19 @@ setup_packages() {
     
     # Steam H264 unlock (fixes some games)
     log "Unlocking Steam H264 codec..."
-    if flatpak list 2>/dev/null | grep -q "com.valvesoftware.Steam"; then
-        info "Flatpak Steam detected"
-        xdg-open steam://unlockh264/ 2>/dev/null &
+    if ! $DRY_RUN; then
+        if flatpak list 2>/dev/null | grep -q "com.valvesoftware.Steam"; then
+            info "Flatpak Steam detected"
+            xdg-open steam://unlockh264/ 2>/dev/null &
+        else
+            steam steam://unlockh264/ 2>/dev/null &
+        fi
+        sleep 2
+        pkill -f "steam://unlockh264" 2>/dev/null || true
+        pkill -f "xdg-open" 2>/dev/null || true
     else
-        steam steam://unlockh264/ 2>/dev/null &
+        dry "Unlock Steam H264 codec"
     fi
-    sleep 2
-    pkill -f "steam://unlockh264" 2>/dev/null || true
-    pkill -f "xdg-open" 2>/dev/null || true
     
     info "Steam Settings (configure manually):"
     info "  • Library → Enable 'Show Steam Deck compatibility info'"
@@ -788,8 +820,9 @@ setup_packages() {
     
     # MangoHud config
     if command -v mangohud >/dev/null 2>&1; then
-        mkdir -p ~/.config/MangoHud
-        cat > ~/.config/MangoHud/MangoHud.conf <<'MANGOHUD'
+        if ! $DRY_RUN; then
+            mkdir -p ~/.config/MangoHud
+            cat > ~/.config/MangoHud/MangoHud.conf <<'MANGOHUD'
 legacy_layout=false
 position=top-left
 font_size=32
@@ -803,7 +836,10 @@ cpu_temp
 ram
 vram
 MANGOHUD
-        info "MangoHud configured"
+            info "MangoHud configured"
+        else
+            dry "Create MangoHud.conf"
+        fi
     fi
     
     step_complete "Packages installed"
@@ -823,11 +859,15 @@ setup_dev() {
     
     # Configure ccache
     if command -v ccache >/dev/null 2>&1; then
-        ccache --set-config=max_size=50G && ccache --set-config=compression=true
-        mkdir -p ~/.ccache
-        grep -qx "cache_dir = $HOME/.ccache" ~/.ccache/ccache.conf 2>/dev/null || \
-            echo "cache_dir = $HOME/.ccache" >> ~/.ccache/ccache.conf
-        info "ccache configured: 50G max, compression enabled"
+        if ! $DRY_RUN; then
+            ccache --set-config=max_size=50G && ccache --set-config=compression=true
+            mkdir -p ~/.ccache
+            grep -qx "cache_dir = $HOME/.ccache" ~/.ccache/ccache.conf 2>/dev/null || \
+                echo "cache_dir = $HOME/.ccache" >> ~/.ccache/ccache.conf
+            info "ccache configured: 50G max, compression enabled"
+        else
+            dry "Configure ccache: 50G max, compression enabled"
+        fi
     fi
     
     confirm "Install Rust toolchain?" "N" && run_sudo dnf install -y rust cargo rustup rustfmt clippy rust-analyzer
@@ -853,17 +893,21 @@ setup_dev() {
 # ==============================================================================
 setup_antigravity() {
     log "Installing Antigravity..."
-    run_sudo tee /etc/yum.repos.d/antigravity.repo > /dev/null <<'EOL'
+    if ! $DRY_RUN; then
+        run_sudo tee /etc/yum.repos.d/antigravity.repo > /dev/null <<'EOL'
 [antigravity-rpm]
 name=Antigravity RPM Repository
 baseurl=https://us-central1-yum.pkg.dev/projects/antigravity-auto-updater-dev/antigravity-rpm
 enabled=1
 gpgcheck=0
 EOL
-    run_sudo dnf makecache && run_sudo dnf install -y antigravity 2>/dev/null || true
+        run_sudo dnf makecache && run_sudo dnf install -y antigravity 2>/dev/null || true
+    else
+        dry "Add Antigravity repo and install antigravity"
+    fi
     
     # Install all extensions
-    if command -v antigravity >/dev/null; then
+    if ! $DRY_RUN && command -v antigravity >/dev/null; then
         log "Installing Antigravity extensions..."
         antigravity --install-extension bradlc.vscode-tailwindcss --install-extension catppuccin.catppuccin-vsc --install-extension christian-kohler.npm-intellisense --install-extension dbaeumer.vscode-eslint --install-extension devsense.composer-php-vscode --install-extension devsense.intelli-php-vscode --install-extension devsense.phptools-vscode --install-extension devsense.profiler-php-vscode --install-extension dsznajder.es7-react-js-snippets --install-extension eamodio.gitlens --install-extension esbenp.prettier-vscode --install-extension formulahendry.code-runner --install-extension golang.go --install-extension hbenl.vscode-mocha-test-adapter --install-extension hbenl.vscode-test-explorer --install-extension llvm-vs-code-extensions.vscode-clangd --install-extension meta.pyrefly --install-extension ms-azuretools.vscode-containers --install-extension ms-azuretools.vscode-docker --install-extension ms-pyright.pyright --install-extension ms-python.debugpy --install-extension ms-python.python --install-extension ms-python.vscode-python-envs --install-extension ms-vscode.cmake-tools --install-extension ms-vscode.cpptools-themes --install-extension ms-vscode.live-server --install-extension ms-vscode.test-adapter-converter --install-extension ms-vscode.vscode-typescript-next --install-extension redhat.java --install-extension shopify.ruby-lsp --install-extension vscjava.vscode-gradle --install-extension vscjava.vscode-java-debug --install-extension vscjava.vscode-java-dependency --install-extension vscjava.vscode-java-pack --install-extension vscjava.vscode-java-test --install-extension vscjava.vscode-maven --install-extension vscode-icons-team.vscode-icons 2>/dev/null || warn "Some extensions failed"
         
@@ -884,16 +928,18 @@ EOL
 }
 SETTINGS
         success "Antigravity settings created"
+    elif $DRY_RUN; then
+        dry "Install Antigravity extensions and create settings.json"
     fi
     step_complete "Antigravity configured"
 }
 
 # ==============================================================================
-# 17. Flatpaks
+# 16. Flatpaks
 # ==============================================================================
 setup_flatpaks() {
     log "Installing Flatpaks..."
-    flatpak install -y flathub org.localsend.localsend_app io.missioncenter.MissionCenter com.vysp3r.ProtonPlus 2>/dev/null || true
+    run flatpak install -y flathub org.localsend.localsend_app io.missioncenter.MissionCenter com.vysp3r.ProtonPlus 2>/dev/null || true
     
     info "ProtonPlus installed - Use for Proton GE:"
     info "  • Only use if a game has issues with default Proton"
@@ -972,18 +1018,22 @@ EOF
     
     # Docker Compose CLI plugin
     log "Installing Docker Compose CLI plugin..."
-    DOCKER_CONFIG=${DOCKER_CONFIG:-$HOME/.docker}
-    mkdir -p "$DOCKER_CONFIG/cli-plugins"
-    if [[ ! -f "$DOCKER_CONFIG/cli-plugins/docker-compose" ]]; then
-        if github_download "docker/compose" "docker-compose-linux-x86_64$" \
-            "$DOCKER_CONFIG/cli-plugins/docker-compose" \
-            "https://github.com/docker/compose/releases/download/v5.0.1/docker-compose-linux-x86_64"; then
-            chmod +x "$DOCKER_CONFIG/cli-plugins/docker-compose"
-            success "Docker Compose installed"
-        else
-            warn "Failed to download Docker Compose"
-            info "Manual download: https://github.com/docker/compose/releases"
+    if ! $DRY_RUN; then
+        DOCKER_CONFIG=${DOCKER_CONFIG:-$HOME/.docker}
+        mkdir -p "$DOCKER_CONFIG/cli-plugins"
+        if [[ ! -f "$DOCKER_CONFIG/cli-plugins/docker-compose" ]]; then
+            if github_download "docker/compose" "docker-compose-linux-x86_64$" \
+                "$DOCKER_CONFIG/cli-plugins/docker-compose" \
+                "https://github.com/docker/compose/releases/download/v5.0.1/docker-compose-linux-x86_64"; then
+                chmod +x "$DOCKER_CONFIG/cli-plugins/docker-compose"
+                success "Docker Compose installed"
+            else
+                warn "Failed to download Docker Compose"
+                info "Manual download: https://github.com/docker/compose/releases"
+            fi
         fi
+    else
+        dry "Download and install Docker Compose CLI plugin"
     fi
     
     step_complete "Docker configured"
@@ -1111,7 +1161,7 @@ show_summary() {
     
     echo "Service Status:"
     systemctl is-active --quiet tlp && echo "  ✅ TLP" || echo "  ❌ TLP"
-    sudo systemctl is-active --quiet docker && echo "  ✅ Docker" || echo "  ❌ Docker"
+    systemctl is-active --quiet docker && echo "  ✅ Docker" || echo "  ❌ Docker"
     command -v nvidia-smi &>/dev/null && echo "  ✅ NVIDIA drivers"
     command -v warp-cli &>/dev/null && { warp-cli account 2>/dev/null | grep -q "Account" && echo "  ✅ Warp registered" || echo "  ⚠️  Warp: not registered"; }
     [[ "$SHELL" == "$(which zsh)" ]] && echo "  ✅ ZSH default" || echo "  ⚠️  ZSH: not default shell"
