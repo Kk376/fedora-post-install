@@ -16,21 +16,17 @@ Built from years of actual Fedora usage, covering the things I find myself setti
 - **Idempotent** — state file tracks what's done; you can interrupt and pick up where you left off, or `--force` to re-run
 - **Profile-based** — six profiles so you only install what you actually need
 - **Dry-run mode** — preview everything without touching the system
-- **Rollback on failure** — stops services and preserves state if something goes wrong
 - **Backup and restore** — backs up config files before modifying them
 
 ---
 
-## What's New in v5.0.1
+## What's New in v5.0.2
 
-- Progress summary now reports completed/failed/skipped steps separately instead of one number that counted failures and skips as done
-- `MangoHud.conf` and `.bashrc` are now backed up before being modified
-- COPR and Antigravity installs report failures instead of swallowing them silently
-- Antigravity CLI now installs via Google's official installer instead of a nonexistent npm package
-- Steam H264 unlock kills only the process it launched, not every `xdg-open` on the system
-- `.zshrc` theme/plugin lines are set through a verified helper instead of relying on `sed`'s exit code
-- Disk space check now says explicitly when it can't determine free space, instead of silently reporting OK
-- The Antigravity repo's `gpgcheck=0` is now called out explicitly when the step runs (see Warnings below)
+- Refactored COPR repository installation into an array-driven loop, removing duplicated logic
+- Single-pass profile step filtering and dynamic step counting
+- Pruned dead/redundant code paths and inlined single-use helpers for a leaner script
+- Standardized command output redirections (`&>/dev/null`) and section headers
+- Full idempotency and state preservation retained across all profiles
 
 See [CHANGELOG.md](CHANGELOG.md) for the full history.
 

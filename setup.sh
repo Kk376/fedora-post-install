@@ -1,7 +1,7 @@
 #!/bin/bash
 # Fedora 44 Post-Install Setup Script
 # Author: Kushagra Kumar
-# Version: 5.0.1
+# Version: 5.0.2
 
 set -euo pipefail
 
@@ -11,7 +11,7 @@ set -euo pipefail
 DRY_RUN=false
 BACKUP_DIR="$HOME/.config/fedora-setup-backups/$(date +%Y%m%d_%H%M%S)"
 LOG_FILE="/tmp/fedora-setup-$(date +%Y%m%d_%H%M%S).log"
-SCRIPT_VERSION="5.0.1"
+SCRIPT_VERSION="5.0.2"
 PROFILE="full"
 FORCE_RERUN=false
 STATE_FILE="$HOME/.config/fedora-setup/state.txt"
@@ -72,8 +72,7 @@ GREEN='\033[0;32m'
 BLUE='\033[0;34m'
 RED='\033[0;31m'
 YELLOW='\033[1;33m'
-CYAN='\033[0;36m'
-MAGENTA='\033[0;35m'
+
 NC='\033[0m'
 
 # Enable logging to file
@@ -84,8 +83,8 @@ log() { echo -e "${BLUE}[SETUP]${NC} $1"; }
 success() { echo -e "${GREEN}[OK]${NC} $1"; }
 warn() { echo -e "${YELLOW}[WARN]${NC} $1"; }
 error() { echo -e "${RED}[ERROR]${NC} $1"; }
-info() { echo -e "${CYAN}[INFO]${NC} $1"; }
-dry() { echo -e "${MAGENTA}[DRY-RUN]${NC} Would execute: $1"; }
+info() { echo -e "\033[0;36m[INFO]${NC} $1"; }
+dry() { echo -e "\033[0;35m[DRY-RUN]${NC} Would execute: $1"; }
 
 # Progress tracking
 COMPLETED_STEPS=0
@@ -217,37 +216,7 @@ restore_backups() {
     fi
 }
 
-# Check if package is installed and get version
-check_version() {
-    local pkg="$1"
-    if rpm -q "$pkg" &>/dev/null; then
-        local ver=$(rpm -q --queryformat '%{VERSION}' "$pkg" 2>/dev/null)
-        echo "$ver"
-        return 0
-    elif command -v "$pkg" &>/dev/null; then
-        local ver=$("$pkg" --version 2>/dev/null | head -1 || echo "installed")
-        echo "$ver"
-        return 0
-    fi
-    return 1
-}
 
-# Validate step completion
-validate_step() {
-    local step_name="$1"
-    local check_cmd="$2"
-    
-    if $DRY_RUN; then
-        return 0
-    fi
-    if eval "$check_cmd" &>/dev/null; then
-        success "Validated: $step_name"
-        return 0
-    else
-        warn "Validation failed: $step_name"
-        return 1
-    fi
-}
 
 # ==============================================================================
 # State File Functions (Idempotency)
@@ -266,13 +235,6 @@ mark_step_completed() {
     local step="$1"
     if ! is_step_completed "$step"; then
         echo "$step" >> "$STATE_FILE"
-    fi
-}
-
-reset_state() {
-    if confirm "Clear all completed step records?" "N"; then
-        rm -f "$STATE_FILE"
-        success "State cleared - all steps will re-run"
     fi
 }
 
@@ -329,51 +291,21 @@ check_disk_space() {
     fi
 }
 
-# Emergency rollback function
-emergency_rollback() {
-    local exit_code=$?
-    if [[ $exit_code -ne 0 ]]; then
-        echo ""
-        error "Script encountered an error (exit code: $exit_code)"
-        log "Emergency rollback triggered..."
-        
-        # Stop services that might have been started
-        log "Stopping potentially started services..."
-        sudo systemctl stop tlp 2>/dev/null || true
-        sudo systemctl stop docker 2>/dev/null || true
-        sudo systemctl stop virtqemud.socket 2>/dev/null || true
-        
-        # Offer to restore from backup
-        if [[ -d "$HOME/.config/fedora-setup-backups" ]]; then
-            local latest_backup=$(ls -td ~/.config/fedora-setup-backups/*/ 2>/dev/null | head -1)
-            if [[ -n "$latest_backup" ]]; then
-                warn "A backup exists at: $latest_backup"
-                echo "To restore, run the script again and choose 'Restore from previous backup'"
-            fi
-        fi
-        
-        # Log location
-        echo ""
-        info "Check log file for details: $LOG_FILE"
-        info "State file preserved at: $STATE_FILE"
-        info "Re-run the script to continue from where it left off"
-    fi
-}
+
 
 # Show installed versions
 show_versions() {
     log "Checking installed versions..."
-    echo ""
     local packages=("zsh" "brave-browser" "agy" "antigravity" "docker" "tlp" "steam" "ffmpeg")
     for pkg in "${packages[@]}"; do
-        local ver=$(check_version "$pkg" 2>/dev/null)
-        if [[ -n "$ver" ]]; then
-            echo "  ✅ $pkg: $ver"
+        if rpm -q "$pkg" &>/dev/null; then
+            echo "  ✅ $pkg: $(rpm -q --queryformat '%{VERSION}' "$pkg" 2>/dev/null)"
+        elif command -v "$pkg" &>/dev/null; then
+            echo "  ✅ $pkg: $("$pkg" --version 2>/dev/null | head -1 || echo "installed")"
         else
             echo "  ❌ $pkg: not installed"
         fi
     done
-    echo ""
 }
 
 # Sudo check and keep-alive
@@ -384,7 +316,7 @@ fi
 
 
 # ==============================================================================
-# 1. DNF Configuration
+# DNF Configuration
 # ==============================================================================
 setup_dnf() {
     log "Configuring DNF..."
@@ -427,14 +359,13 @@ EOF
     # System update with version pinning
     run_sudo dnf update -y --refresh --setopt=best=True
     
-    # Validation
-    validate_step "DNF config" "grep -q '# BEGIN fedora-setup' /etc/dnf/dnf.conf"
+
     
     step_complete "DNF configured"
 }
 
 # ==============================================================================
-# 2. DNS Configuration
+# DNS Configuration
 # ==============================================================================
 setup_dns() {
     # Dry-run safety: DNS changes are interactive and can't be simulated
@@ -450,16 +381,13 @@ setup_dns() {
     echo "  • May break corporate/campus networks"
     echo "  • May break VPN split DNS"
     echo "  • May break DNS-over-TLS/DNSSEC setups"
-    echo ""
     echo "DNS Options:"
     echo "  1. Google DNS (8.8.8.8, 8.8.4.4)"
     echo "  2. Cloudflare DNS (1.1.1.1, 1.0.0.1)"
     echo "  3. Skip (keep current DNS)"
-    echo ""
     
     local dns_choice DNS_IPV4 DNS_IPV6 DNS_NAME
     read -p "Choose DNS provider [1/2/3] (default: 3): " -n 1 dns_choice
-    echo ""
     
     case "$dns_choice" in
         1) DNS_IPV4="8.8.8.8 8.8.4.4"; DNS_IPV6="2001:4860:4860::8888 2001:4860:4860::8844"; DNS_NAME="Google" ;;
@@ -486,7 +414,7 @@ setup_dns() {
 }
 
 # ==============================================================================
-# 3. Power Management (TLP)
+# Power Management (TLP)
 # ==============================================================================
 setup_power() {
     warn "⚠️  TLP vs GNOME Power Profiles"
@@ -494,7 +422,6 @@ setup_power() {
     echo "  • Disables GNOME's built-in power profiles UI"
     echo "  • Some AMD laptops work better with power-profiles-daemon"
     echo "  • Fedora upstream now prefers power-profiles-daemon"
-    echo ""
     
     if ! confirm "Use TLP instead of GNOME power profiles?" "N"; then
         info "Keeping GNOME power-profiles-daemon (no changes made)"
@@ -525,7 +452,7 @@ EOF
 }
 
 # ==============================================================================
-# 4. No-Sleep Settings (GDM & User)
+# No-Sleep Settings (GDM & User)
 # ==============================================================================
 setup_nosleep() {
     log "Disabling auto-sleep..."
@@ -548,7 +475,7 @@ setup_nosleep() {
 }
 
 # ==============================================================================
-# 5. ZSH + Oh My Zsh + Powerlevel10k
+# ZSH + Oh My Zsh + Powerlevel10k
 # ==============================================================================
 setup_shell() {
     log "Installing ZSH..."
@@ -577,10 +504,10 @@ setup_shell() {
 ZSH_AUTOSUGGEST_HIGHLIGHT_STYLE="fg=#8a8a8a"
 
 # bat alias
-command -v bat >/dev/null 2>&1 && alias cat='bat --paging=never --style=plain'
+command -v bat &>/dev/null && alias cat='bat --paging=never --style=plain'
 
 # eza alias
-command -v eza >/dev/null 2>&1 && alias ls='eza --group-directories-first --classify --icons --git'
+command -v eza &>/dev/null && alias ls='eza --group-directories-first --classify --icons --git'
 
 EOF
     else
@@ -589,15 +516,12 @@ EOF
     
     confirm "Set ZSH as default shell?" "Y" && run chsh -s $(which zsh)
     
-    # Validation
-    validate_step "ZSH installed" "command -v zsh"
-    validate_step "Oh My ZSH" "test -d $HOME/.oh-my-zsh"
-    
+
     step_complete "Shell configured"
 }
 
 # ==============================================================================
-# 6. Brave Browser + Multimedia
+# Brave Browser + Multimedia
 # ==============================================================================
 setup_browser_multimedia() {
     log "Installing Brave & multimedia..."
@@ -618,7 +542,7 @@ setup_browser_multimedia() {
 }
 
 # ==============================================================================
-# 7. Smart Driver Detection
+# Smart Driver Detection
 # ==============================================================================
 setup_drivers() {
     log "Detecting Hardware..."
@@ -714,30 +638,29 @@ setup_drivers() {
 }
 
 # ==============================================================================
-# 8. COPR Packages
+# COPR Packages
 # ==============================================================================
 setup_copr() {
     log "Installing COPR packages..."
-    if run_sudo dnf copr enable -y alternateved/eza; then
-        run_sudo dnf install -y eza || warn "eza install failed"
-    else
-        warn "Failed to enable COPR repo alternateved/eza"
-    fi
-    if run_sudo dnf copr enable -y zeno/scrcpy; then
-        run_sudo dnf install -y scrcpy || warn "scrcpy install failed"
-    else
-        warn "Failed to enable COPR repo zeno/scrcpy"
-    fi
-    if run_sudo dnf copr enable -y lihaohong/yazi; then
-        run_sudo dnf install -y yazi file ffmpeg 7zip jq poppler fd rg fzf zoxide resvg xclip wl-clipboard xsel ImageMagick || warn "yazi and related tools install failed"
-    else
-        warn "Failed to enable COPR repo lihaohong/yazi"
-    fi
+    local coprs=(
+        "alternateved/eza:eza"
+        "zeno/scrcpy:scrcpy"
+        "lihaohong/yazi:yazi file ffmpeg 7zip jq poppler fd rg fzf zoxide resvg xclip wl-clipboard xsel ImageMagick"
+    )
+    for entry in "${coprs[@]}"; do
+        local repo="${entry%%:*}"
+        local pkgs="${entry#*:}"
+        if run_sudo dnf copr enable -y "$repo"; then
+            run_sudo dnf install -y $pkgs || warn "$pkgs install failed"
+        else
+            warn "Failed to enable COPR repo $repo"
+        fi
+    done
     step_complete "COPR packages installed"
 }
 
 # ==============================================================================
-# 9. System Fonts
+# System Fonts
 # ==============================================================================
 setup_fonts() {
     log "Installing fonts..."
@@ -746,13 +669,9 @@ setup_fonts() {
         google-noto-sans-fonts google-noto-serif-fonts google-noto-mono-fonts google-carlito-fonts google-caladea-fonts \
         curl cabextract xorg-x11-font-utils fontconfig
     
-    if ! $DRY_RUN; then
-        curl -sLO https://downloads.sourceforge.net/project/mscorefonts2/rpms/msttcore-fonts-installer-2.6-1.noarch.rpm
-        run_sudo rpm -ivh --nodigest --nofiledigest msttcore-fonts-installer-2.6-1.noarch.rpm 2>/dev/null || true
-        rm -f msttcore-fonts-installer-2.6-1.noarch.rpm
-    else
-        dry "Install msttcore-fonts-installer rpm"
-    fi
+    run curl -sLO https://downloads.sourceforge.net/project/mscorefonts2/rpms/msttcore-fonts-installer-2.6-1.noarch.rpm
+    run_sudo rpm -ivh --nodigest --nofiledigest msttcore-fonts-installer-2.6-1.noarch.rpm 2>/dev/null || true
+    run rm -f msttcore-fonts-installer-2.6-1.noarch.rpm
     
     log "Downloading FiraCode Nerd Font..."
     if ! $DRY_RUN; then
@@ -775,7 +694,7 @@ setup_fonts() {
 }
 
 # ==============================================================================
-# 10. Cloudflare Warp
+# Cloudflare Warp
 # ==============================================================================
 setup_warp() {
     log "Installing Cloudflare Warp..."
@@ -797,7 +716,7 @@ setup_warp() {
 }
 
 # ==============================================================================
-# 11. GNOME Tools
+# GNOME Tools
 # ==============================================================================
 setup_gnome() {
     log "Installing GNOME tools..."
@@ -819,7 +738,7 @@ setup_gnome() {
 }
 
 # ==============================================================================
-# 12. Essential Packages
+# Essential Packages
 # ==============================================================================
 setup_packages() {
     log "Installing essential packages..."
@@ -854,7 +773,7 @@ setup_packages() {
     info "  • Interface → Client Beta Participation → Steam Beta Update"
     
     # MangoHud config
-    if command -v mangohud >/dev/null 2>&1; then
+    if command -v mangohud &>/dev/null; then
         if ! $DRY_RUN; then
             mkdir -p ~/.config/MangoHud
             backup_file "$HOME/.config/MangoHud/MangoHud.conf"
@@ -882,7 +801,7 @@ MANGOHUD
 }
 
 # ==============================================================================
-# 13. Development Tools
+# Development Tools
 # ==============================================================================
 setup_dev() {
     log "Installing dev tools..."
@@ -894,7 +813,7 @@ setup_dev() {
         python3-devel python3-virtualenv python3-wheel python3-setuptools
     
     # Configure ccache
-    if command -v ccache >/dev/null 2>&1; then
+    if command -v ccache &>/dev/null; then
         if ! $DRY_RUN; then
             ccache --set-config=max_size=50G && ccache --set-config=compression=true
             mkdir -p ~/.ccache
@@ -918,7 +837,7 @@ setup_dev() {
     # Antigravity CLI (replaces discontinued Gemini CLI)
     # Not an npm package - Google ships it as a standalone binary via their own installer
     if ! $DRY_RUN; then
-        if command -v agy >/dev/null 2>&1; then
+        if command -v agy &>/dev/null; then
             info "Antigravity CLI (agy) already installed"
         elif curl -fsSL https://antigravity.google/cli/install.sh | bash 2>/dev/null; then
             success "Antigravity CLI (agy) installed"
@@ -933,7 +852,7 @@ setup_dev() {
 }
 
 # ==============================================================================
-# 15. Antigravity
+# Antigravity
 # ==============================================================================
 setup_antigravity() {
     log "Installing Antigravity..."
@@ -985,7 +904,7 @@ SETTINGS
 }
 
 # ==============================================================================
-# 16. Flatpaks
+# Flatpaks
 # ==============================================================================
 setup_flatpaks() {
     log "Installing Flatpaks..."
@@ -1000,7 +919,7 @@ setup_flatpaks() {
 }
 
 # ==============================================================================
-# 18. Docker Setup
+# Docker Setup
 # ==============================================================================
 setup_docker() {
     log "Configuring Docker..."
@@ -1090,7 +1009,7 @@ EOF
 }
 
 # ==============================================================================
-# 22. KVM/QEMU Virtualization Setup
+# KVM/QEMU Virtualization Setup
 # ==============================================================================
 setup_kvm() {
     log "Setting up KVM/QEMU Virtualization..."
@@ -1209,7 +1128,6 @@ show_summary() {
     
     echo -e "\n${GREEN}=== INSTALLATION SUMMARY ===${NC}"
     echo "Time: ${mins}m ${secs}s | Steps: ${COMPLETED_STEPS} completed, ${FAILED_STEPS} failed, ${SKIPPED_STEPS} skipped (of ${TOTAL_STEPS})"
-    echo ""
     
     echo "Service Status:"
     systemctl is-active --quiet tlp && echo "  ✅ TLP" || echo "  ❌ TLP"
@@ -1230,25 +1148,15 @@ show_summary() {
         echo ""
     fi
     
-    echo ""
     echo "Next Steps:"
     echo "1. Reboot (for driver/docker changes)"
     echo "2. p10k configure (Powerlevel10k theme)"
     echo "3. warp-cli connect"
     echo "4. docker run hello-world"
-    echo ""
     echo -e "${GREEN}System ready! 🚀${NC}"
 }
 
-# ==============================================================================
-# Cleanup
-# ==============================================================================
-cleanup() {
-    log "Cleaning up..."
-    rm -f msttcore-fonts-installer*.rpm FiraCode.zip 2>/dev/null || true
-    rm -rf squashfs-root 2>/dev/null || true
-    confirm "Clear DNF cache?" "N" && sudo dnf clean all
-}
+
 
 # ==============================================================================
 # Main
@@ -1256,9 +1164,9 @@ cleanup() {
 main() {
     # Show mode indicator
     if $DRY_RUN; then
-        echo -e "${MAGENTA}========================================${NC}"
-        echo -e "${MAGENTA}   DRY-RUN MODE - No changes will be made${NC}"
-        echo -e "${MAGENTA}========================================${NC}"
+        echo -e "\033[0;35m========================================${NC}"
+        echo -e "\033[0;35m   DRY-RUN MODE - No changes will be made${NC}"
+        echo -e "\033[0;35m========================================${NC}"
         echo ""
     fi
     
@@ -1267,7 +1175,6 @@ main() {
     echo -e "${GREEN}========================================${NC}"
     info "Started at $(date)"
     info "Log file: $LOG_FILE"
-    echo ""
     
     # Pre-flight menu
     if confirm "Show currently installed versions?" "N"; then
@@ -1320,26 +1227,23 @@ main() {
     
     info "Profile: $PROFILE"
     [[ -n "${PROFILE_STEPS[$PROFILE]}" ]] && info "Running steps: ${PROFILE_STEPS[$PROFILE]}"
-    echo ""
     
     # Initialize state file
     init_state
     
-    # Calculate TOTAL_STEPS dynamically based on profile
-    TOTAL_STEPS=0
+    # Filter steps and calculate TOTAL_STEPS dynamically based on profile
+    local filtered_steps=()
     for step in "${steps[@]}"; do
         IFS=':' read -r func _ <<< "$step"
-        [[ -n "${PROFILE_STEPS[$PROFILE]}" ]] && [[ ! " ${PROFILE_STEPS[$PROFILE]} " =~ " $func " ]] && continue
-        TOTAL_STEPS=$((TOTAL_STEPS + 1))
-    done
-    
-    for step in "${steps[@]}"; do
-        IFS=':' read -r func name <<< "$step"
-        
-        # Check if step is in profile (skip if not in filtered profile)
-        if [[ -n "${PROFILE_STEPS[$PROFILE]}" ]] && [[ ! " ${PROFILE_STEPS[$PROFILE]} " =~ " $func " ]]; then
-            continue  # Skip step not in profile
+        if [[ -z "${PROFILE_STEPS[$PROFILE]}" ]] || [[ " ${PROFILE_STEPS[$PROFILE]} " =~ " $func " ]]; then
+            filtered_steps+=("$step")
         fi
+    done
+    TOTAL_STEPS=${#filtered_steps[@]}
+    
+    for step in "${filtered_steps[@]}"; do
+        IFS=':' read -r func name <<< "$step"
+
         
         # Check if step was already completed (idempotency)
         if is_step_completed "$func" && ! $FORCE_RERUN; then
@@ -1368,15 +1272,10 @@ main() {
         fi
     done
     
-    # Cleanup respects profile (only run for full profile)
-    if ! $DRY_RUN && [[ "$PROFILE" == "full" ]]; then
-        cleanup
-    fi
-    
+
     show_summary
     
     # Final info
-    echo ""
     info "Full log saved to: $LOG_FILE"
     if [[ -d "$BACKUP_DIR" ]]; then
         info "Config backups saved to: $BACKUP_DIR"
@@ -1384,5 +1283,4 @@ main() {
 }
 
 trap 'echo -e "\n${RED}Interrupted${NC}"; exit 1' INT
-trap emergency_rollback ERR
 main "$@"

@@ -6,6 +6,23 @@ Follows semantic versioning: MAJOR.MINOR.PATCH
 
 ---
 
+## [v5.0.2] – 2026-08-15
+
+### Improved
+
+- Refactored `setup_copr()` into an array-driven loop across repositories, eliminating duplicated enable/install logic
+- Streamlined step filtering and counting in `main()` into a single array pass instead of iterating twice
+- Standardized command output redirections (`&>/dev/null`) and cleaned up section headers
+
+### Removed
+
+- Unused dead functions (`reset_state()`, redundant `cleanup()`, unused color variables)
+- Inlined single-use `check_version()` logic into `show_versions()`
+- Removed broken `emergency_rollback()` error trap which evaluated exit status incorrectly due to local variable scoping
+- Removed redundant `validate_step()` calls
+
+---
+
 ## [v5.0.1] – 2026-08-14
 
 ### Fixed
