@@ -20,12 +20,11 @@ Built from years of actual Fedora usage, covering the things I find myself setti
 
 ---
 
-## What's New in v5.0.2
+## What's New in v5.0.3
 
-- Refactored COPR repository installation into an array-driven loop, removing duplicated logic
-- Single-pass profile step filtering and dynamic step counting
-- Pruned dead/redundant code paths and inlined single-use helpers for a leaner script
-- Standardized command output redirections (`&>/dev/null`) and section headers
+- Replaced Discord with Vesktop (Linux-first client without telemetry) in essential packages
+- Automatic architecture-aware GitHub release `.rpm` download and installation with reliable fallback
+- Added `vesktop` check to installation version summary
 - Full idempotency and state preservation retained across all profiles
 
 See [CHANGELOG.md](CHANGELOG.md) for the full history.

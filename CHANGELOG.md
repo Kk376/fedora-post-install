@@ -6,6 +6,15 @@ Follows semantic versioning: MAJOR.MINOR.PATCH
 
 ---
 
+## [v5.0.3] – 2026-08-16
+
+### Changed
+
+- Replaced Discord with Vesktop in `setup_packages()`: Discord was previously silently skipped by `dnf` because it is not available in official Fedora repos; Vesktop is now automatically downloaded and installed via its official GitHub release `.rpm` with fallback and architecture detection
+- Added `vesktop` to `show_versions()` installed package checks
+
+---
+
 ## [v5.0.2] – 2026-08-15
 
 ### Improved

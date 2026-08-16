@@ -1,7 +1,7 @@
 #!/bin/bash
 # Fedora 44 Post-Install Setup Script
 # Author: Kushagra Kumar
-# Version: 5.0.2
+# Version: 5.0.3
 
 set -euo pipefail
 
@@ -11,7 +11,7 @@ set -euo pipefail
 DRY_RUN=false
 BACKUP_DIR="$HOME/.config/fedora-setup-backups/$(date +%Y%m%d_%H%M%S)"
 LOG_FILE="/tmp/fedora-setup-$(date +%Y%m%d_%H%M%S).log"
-SCRIPT_VERSION="5.0.2"
+SCRIPT_VERSION="5.0.3"
 PROFILE="full"
 FORCE_RERUN=false
 STATE_FILE="$HOME/.config/fedora-setup/state.txt"
@@ -296,7 +296,7 @@ check_disk_space() {
 # Show installed versions
 show_versions() {
     log "Checking installed versions..."
-    local packages=("zsh" "brave-browser" "agy" "antigravity" "docker" "tlp" "steam" "ffmpeg")
+    local packages=("zsh" "brave-browser" "vesktop" "agy" "antigravity" "docker" "tlp" "steam" "ffmpeg")
     for pkg in "${packages[@]}"; do
         if rpm -q "$pkg" &>/dev/null; then
             echo "  ✅ $pkg: $(rpm -q --queryformat '%{VERSION}' "$pkg" 2>/dev/null)"
@@ -745,7 +745,7 @@ setup_packages() {
     run_sudo dnf install -y --skip-unavailable gcc clang fastfetch make cmake perl wmctrl cargo maven bat \
         java-latest-openjdk java-latest-openjdk-devel nodejs python3 python3-pip wget htop unzip unrar \
         p7zip p7zip-plugins ntfs-3g gparted timeshift vlc steam mangohud \
-        discord telegram-desktop vim neovim gh android-tools libva-utils gstreamer1-plugin-openh264
+        telegram-desktop vim neovim gh android-tools libva-utils gstreamer1-plugin-openh264
 
     run_sudo dnf config-manager setopt fedora-cisco-openh264.enabled=1
     
@@ -795,6 +795,37 @@ MANGOHUD
         else
             dry "Create MangoHud.conf"
         fi
+    fi
+
+    # Vesktop (Linux-first Discord client without telemetry)
+    log "Installing Vesktop..."
+    if ! $DRY_RUN; then
+        if command -v vesktop &>/dev/null || rpm -q vesktop &>/dev/null; then
+            info "Vesktop already installed"
+        else
+            local arch
+            arch="$(uname -m)"
+            local fallback_url=""
+            local latest_tag
+            latest_tag=$(curl -sIL "https://github.com/Vencord/Vesktop/releases/latest" 2>/dev/null | grep -i "^location:" | sed -E 's/.*tag\/(v[0-9.]+).*/\1/' | tr -d '\r\n')
+            if [[ -n "$latest_tag" ]]; then
+                local ver="${latest_tag#v}"
+                fallback_url="https://github.com/Vencord/Vesktop/releases/download/${latest_tag}/vesktop-${ver}.${arch}.rpm"
+            fi
+
+            if github_download "Vencord/Vesktop" "vesktop.*\\.${arch}\\.rpm" "/tmp/vesktop.rpm" "$fallback_url"; then
+                if run_sudo dnf install -y /tmp/vesktop.rpm 2>/dev/null; then
+                    success "Vesktop installed"
+                else
+                    warn "Vesktop RPM install failed"
+                fi
+                rm -f /tmp/vesktop.rpm
+            else
+                warn "Failed to download Vesktop RPM — install manually from https://github.com/Vencord/Vesktop/releases"
+            fi
+        fi
+    else
+        dry "Download and install Vesktop RPM from GitHub Releases"
     fi
     
     step_complete "Packages installed"
