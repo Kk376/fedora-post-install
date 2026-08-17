@@ -6,6 +6,30 @@ Follows semantic versioning: MAJOR.MINOR.PATCH
 
 ---
 
+## [v5.1.0] – 2026-08-17
+
+### Changed
+
+- Moved GPU driver setup (`setup_drivers`) from step 8 to the final step, after all packages, tools, and services are installed and configured
+- Gaming and creator profile step ordering updated to match
+- Swapped awk variable passing in `set_zshrc_line` to use `ENVIRON` to prevent backslash unescaping issues on regex patterns
+
+### Added
+
+- `setup_pre_driver_reboot`: automatic reboot checkpoint before driver setup. Compares the running kernel against the latest installed kernel (from `dnf update`). If they differ, prompts the user to reboot first so `akmods` builds NVIDIA modules against the correct kernel. On re-run, the state file skips all completed steps and resumes at driver setup.
+- Automated test suites under `tests/` covering profile step integrity, CLI options matrix, helper functions, and backup/restore subsystems (135 tests)
+
+### Fixed
+
+- Fixed tilde expansion issue in ZSH custom plugin clone paths by standardizing to `$HOME/.oh-my-zsh/custom`
+- Corrected package names for Yazi in COPR setup (`ripgrep`, `fd-find`, `poppler-utils`) and added `--skip-unavailable`
+- Ensured `warp-svc` service is started before attempting `warp-cli` registration
+- Added `unzip` package to `setup_fonts` before font archive extraction
+- Added pipefail error safeguards to `check_disk_space`, `setup_pre_driver_reboot`, and Vesktop release tag parsing
+- Locally scoped GPU and chassis variables in `setup_drivers`
+
+---
+
 ## [v5.0.3] – 2026-08-16
 
 ### Changed

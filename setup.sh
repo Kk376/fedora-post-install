@@ -11,7 +11,7 @@ set -euo pipefail
 DRY_RUN=false
 BACKUP_DIR="$HOME/.config/fedora-setup-backups/$(date +%Y%m%d_%H%M%S)"
 LOG_FILE="/tmp/fedora-setup-$(date +%Y%m%d_%H%M%S).log"
-SCRIPT_VERSION="5.0.3"
+SCRIPT_VERSION="5.1.0"
 PROFILE="full"
 FORCE_RERUN=false
 STATE_FILE="$HOME/.config/fedora-setup/state.txt"
@@ -157,8 +157,11 @@ set_zshrc_line() {
     local pattern="$1" desired="$2"
     grep -qxF "$desired" ~/.zshrc 2>/dev/null && return 0
     if grep -qE "$pattern" ~/.zshrc 2>/dev/null; then
-        awk -v pat="$pattern" -v repl="$desired" \
-            '$0 ~ pat { print repl; next } { print }' ~/.zshrc > ~/.zshrc.tmp && mv ~/.zshrc.tmp ~/.zshrc
+        PAT="$pattern" REPL="$desired" awk '
+            BEGIN { pat = ENVIRON["PAT"]; repl = ENVIRON["REPL"] }
+            $0 ~ pat { print repl; next }
+            { print }
+        ' ~/.zshrc > ~/.zshrc.tmp && mv ~/.zshrc.tmp ~/.zshrc
     fi
     grep -qxF "$desired" ~/.zshrc 2>/dev/null || echo "$desired" >> ~/.zshrc
 }
@@ -185,9 +188,15 @@ restore_backups() {
         warn "No backups found"
         return 1
     fi
+    latest_backup="${latest_backup%/}"
     
     log "Latest backup: $latest_backup"
     if confirm "Restore all files from this backup?" "N"; then
+        local prev_dotglob prev_nullglob
+        prev_dotglob=$(shopt -p dotglob || true)
+        prev_nullglob=$(shopt -p nullglob || true)
+        shopt -s dotglob nullglob
+
         for backup_file in "$latest_backup"/*; do
             local filename=$(basename "$backup_file" .backup)
             local original_paths=(
@@ -201,13 +210,21 @@ restore_backups() {
                     if $DRY_RUN; then
                         dry "cp $backup_file $orig"
                     else
-                        sudo cp "$backup_file" "$orig" 2>/dev/null || cp "$backup_file" "$orig"
+                        if [[ "$orig" =~ ^/etc/ ]]; then
+                            run_sudo cp "$backup_file" "$orig"
+                        else
+                            cp "$backup_file" "$orig"
+                        fi
                         success "Restored: $orig"
                     fi
                     break
                 fi
             done
         done
+
+        eval "$prev_dotglob"
+        eval "$prev_nullglob"
+
         # Reset state file after restore to prevent stale state
         if ! $DRY_RUN; then
             rm -f "$STATE_FILE"
@@ -273,7 +290,7 @@ check_disk_space() {
     local required_gb=${1:-20}
     local target_dir=${2:-$HOME}
     local available_gb
-    available_gb=$(df -BG "$target_dir" 2>/dev/null | awk 'NR==2 {print $4}' | sed 's/G//')
+    available_gb=$(df -BG "$target_dir" 2>/dev/null | awk 'NR==2 {print $4}' | sed 's/G//' || true)
 
     if [[ -z "$available_gb" ]]; then
         warn "Could not determine free disk space for $target_dir - skipping check"
@@ -484,9 +501,9 @@ setup_shell() {
     if ! $DRY_RUN; then
         [[ ! -d "$HOME/.oh-my-zsh" ]] && sh -c "$(curl -fsSL https://raw.githubusercontent.com/ohmyzsh/ohmyzsh/master/tools/install.sh)" "" --unattended
         
-        run git clone --depth=1 https://github.com/romkatv/powerlevel10k.git ${ZSH_CUSTOM:-$HOME/.oh-my-zsh/custom}/themes/powerlevel10k 2>/dev/null || true
-        run git clone https://github.com/zsh-users/zsh-autosuggestions ${ZSH_CUSTOM:-~/.oh-my-zsh/custom}/plugins/zsh-autosuggestions 2>/dev/null || true
-        run git clone https://github.com/zsh-users/zsh-syntax-highlighting ${ZSH_CUSTOM:-~/.oh-my-zsh/custom}/plugins/zsh-syntax-highlighting 2>/dev/null || true
+        run git clone --depth=1 https://github.com/romkatv/powerlevel10k.git "${ZSH_CUSTOM:-$HOME/.oh-my-zsh/custom}/themes/powerlevel10k" 2>/dev/null || true
+        run git clone https://github.com/zsh-users/zsh-autosuggestions "${ZSH_CUSTOM:-$HOME/.oh-my-zsh/custom}/plugins/zsh-autosuggestions" 2>/dev/null || true
+        run git clone https://github.com/zsh-users/zsh-syntax-highlighting "${ZSH_CUSTOM:-$HOME/.oh-my-zsh/custom}/plugins/zsh-syntax-highlighting" 2>/dev/null || true
     else
         dry "Install Oh My ZSH, Powerlevel10k, plugins"
     fi
@@ -496,7 +513,7 @@ setup_shell() {
     
     if ! $DRY_RUN; then
         set_zshrc_line 'ZSH_THEME=' 'ZSH_THEME="powerlevel10k/powerlevel10k"'
-        set_zshrc_line '^plugins=\(' 'plugins=(git zsh-autosuggestions zsh-syntax-highlighting)'
+        set_zshrc_line '^plugins=' 'plugins=(git zsh-autosuggestions zsh-syntax-highlighting)'
         
         cat >> ~/.zshrc <<'EOF'
 
@@ -514,7 +531,7 @@ EOF
         dry "Configure .zshrc with theme and plugins"
     fi
     
-    confirm "Set ZSH as default shell?" "Y" && run chsh -s $(which zsh)
+    confirm "Set ZSH as default shell?" "Y" && run chsh -s "$(command -v zsh)"
     
 
     step_complete "Shell configured"
@@ -542,11 +559,57 @@ setup_browser_multimedia() {
 }
 
 # ==============================================================================
+# Pre-Driver Reboot Checkpoint
+# ==============================================================================
+setup_pre_driver_reboot() {
+    log "Pre-driver reboot checkpoint"
+
+    if $DRY_RUN; then
+        dry "Check running kernel vs installed kernel, prompt reboot if mismatched"
+        step_complete "Reboot checkpoint (dry-run)"
+        return 0
+    fi
+
+    # Check if the running kernel matches the installed kernel
+    local running_kernel installed_kernel
+    running_kernel=$(uname -r)
+    installed_kernel=$(rpm -q --last kernel-core kernel 2>/dev/null | head -1 | awk '{print $1}' | sed -E 's/kernel-(core-)?//' || true)
+
+    if [[ "$running_kernel" != "$installed_kernel" ]]; then
+        warn "Kernel mismatch detected"
+        info "  Running:   $running_kernel"
+        info "  Installed: $installed_kernel"
+        echo ""
+        echo "All packages and software have been installed."
+        echo "A reboot is needed before driver setup so that kernel modules"
+        echo "build against the kernel you're actually going to use."
+        echo ""
+        echo "After rebooting, re-run this script with the same arguments."
+        echo "It will skip everything already done and pick up at GPU drivers."
+        echo ""
+        if confirm "Reboot now?" "Y"; then
+            mark_step_completed "setup_pre_driver_reboot"
+            step_complete "Reboot checkpoint (rebooting)"
+            run_sudo reboot
+            exit 0
+        else
+            warn "Skipping reboot. Driver modules may build against a stale kernel."
+            echo "If you run into driver issues after this, reboot and re-run the script."
+        fi
+    else
+        info "Running kernel matches installed kernel — no reboot needed"
+    fi
+
+    step_complete "Reboot checkpoint"
+}
+
+# ==============================================================================
 # Smart Driver Detection
 # ==============================================================================
 setup_drivers() {
     log "Detecting Hardware..."
     
+    local CHASSIS GPU_NVIDIA GPU_AMD GPU_INTEL SB_STATE
     CHASSIS=$(hostnamectl chassis 2>/dev/null || echo "unknown")
     # More specific GPU detection to avoid false positives
     GPU_NVIDIA=$(lspci | grep -Ei 'VGA|3D|Display' | grep -i nvidia || true)
@@ -645,13 +708,13 @@ setup_copr() {
     local coprs=(
         "alternateved/eza:eza"
         "zeno/scrcpy:scrcpy"
-        "lihaohong/yazi:yazi file ffmpeg 7zip jq poppler fd rg fzf zoxide resvg xclip wl-clipboard xsel ImageMagick"
+        "lihaohong/yazi:yazi file ffmpeg 7zip jq poppler-utils fd-find ripgrep fzf zoxide resvg xclip wl-clipboard xsel ImageMagick"
     )
     for entry in "${coprs[@]}"; do
         local repo="${entry%%:*}"
         local pkgs="${entry#*:}"
         if run_sudo dnf copr enable -y "$repo"; then
-            run_sudo dnf install -y $pkgs || warn "$pkgs install failed"
+            run_sudo dnf install -y --skip-unavailable $pkgs || warn "$pkgs install failed"
         else
             warn "Failed to enable COPR repo $repo"
         fi
@@ -664,7 +727,7 @@ setup_copr() {
 # ==============================================================================
 setup_fonts() {
     log "Installing fonts..."
-    run_sudo dnf install -y --skip-unavailable mscore-fonts mscore-fonts-all dejavu-sans-fonts dejavu-serif-fonts \
+    run_sudo dnf install -y --skip-unavailable unzip mscore-fonts mscore-fonts-all dejavu-sans-fonts dejavu-serif-fonts \
         dejavu-sans-mono-fonts liberation-sans-fonts liberation-serif-fonts liberation-mono-fonts \
         google-noto-sans-fonts google-noto-serif-fonts google-noto-mono-fonts google-carlito-fonts google-caladea-fonts \
         curl cabextract xorg-x11-font-utils fontconfig
@@ -701,6 +764,9 @@ setup_warp() {
     run_sudo dnf install -y sassc glib2-devel libxml2 glibc-devel
     run_sudo dnf config-manager addrepo --from-repofile=https://pkg.cloudflareclient.com/cloudflare-warp-ascii.repo --overwrite 2>/dev/null || true
     run_sudo dnf install -y cloudflare-warp
+    
+    # Enable and start warp-svc before registration
+    run_sudo systemctl enable --now warp-svc 2>/dev/null || true
     
     # Only register if not already registered
     if ! $DRY_RUN; then
@@ -807,7 +873,7 @@ MANGOHUD
             arch="$(uname -m)"
             local fallback_url=""
             local latest_tag
-            latest_tag=$(curl -sIL "https://github.com/Vencord/Vesktop/releases/latest" 2>/dev/null | grep -i "^location:" | sed -E 's/.*tag\/(v[0-9.]+).*/\1/' | tr -d '\r\n')
+            latest_tag=$(curl -sIL "https://github.com/Vencord/Vesktop/releases/latest" 2>/dev/null | grep -i "^location:" | sed -E 's/.*tag\/(v[0-9.]+).*/\1/' | tr -d '\r\n' || true)
             if [[ -n "$latest_tag" ]]; then
                 local ver="${latest_tag#v}"
                 fallback_url="https://github.com/Vencord/Vesktop/releases/download/${latest_tag}/vesktop-${ver}.${arch}.rpm"
@@ -1180,7 +1246,7 @@ show_summary() {
     fi
     
     echo "Next Steps:"
-    echo "1. Reboot (for driver/docker changes)"
+    echo "1. Reboot if you haven't already (Docker group, libvirt group, MOK enrollment)"
     echo "2. p10k configure (Powerlevel10k theme)"
     echo "3. warp-cli connect"
     echo "4. docker run hello-world"
@@ -1235,7 +1301,6 @@ main() {
         "setup_fonts:System Fonts"
         "setup_shell:ZSH + Powerlevel10k"
         "setup_browser_multimedia:Brave + Multimedia"
-        "setup_drivers:GPU Drivers"
         "setup_copr:COPR Packages"
         "setup_warp:Cloudflare Warp"
         "setup_gnome:GNOME Tools"
@@ -1245,15 +1310,17 @@ main() {
         "setup_flatpaks:Flatpak Apps"
         "setup_docker:Docker Setup"
         "setup_kvm:KVM/QEMU Virtualization"
+        "setup_pre_driver_reboot:Pre-Driver Reboot"
+        "setup_drivers:GPU Drivers"
     )
     
     # Define profile step filters
     local -A PROFILE_STEPS
     PROFILE_STEPS[minimal]="setup_dnf setup_fonts setup_shell"
     PROFILE_STEPS[dev]="setup_dnf setup_fonts setup_shell setup_dev setup_docker setup_antigravity setup_kvm"
-    PROFILE_STEPS[gaming]="setup_dnf setup_fonts setup_shell setup_drivers setup_packages setup_flatpaks setup_browser_multimedia"
+    PROFILE_STEPS[gaming]="setup_dnf setup_fonts setup_shell setup_browser_multimedia setup_packages setup_flatpaks setup_pre_driver_reboot setup_drivers"
     PROFILE_STEPS[workstation]="setup_dnf setup_dns setup_fonts setup_shell setup_dev setup_docker setup_antigravity setup_kvm"
-    PROFILE_STEPS[creator]="setup_dnf setup_fonts setup_shell setup_drivers setup_browser_multimedia setup_copr setup_packages setup_flatpaks"
+    PROFILE_STEPS[creator]="setup_dnf setup_fonts setup_shell setup_browser_multimedia setup_copr setup_packages setup_flatpaks setup_pre_driver_reboot setup_drivers"
     PROFILE_STEPS[full]=""  # Empty means all steps
     
     info "Profile: $PROFILE"

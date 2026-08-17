@@ -20,12 +20,13 @@ Built from years of actual Fedora usage, covering the things I find myself setti
 
 ---
 
-## What's New in v5.0.3
+## What's New in v5.1.0
 
-- Replaced Discord with Vesktop (Linux-first client without telemetry) in essential packages
-- Automatic architecture-aware GitHub release `.rpm` download and installation with reliable fallback
-- Added `vesktop` check to installation version summary
-- Full idempotency and state preservation retained across all profiles
+- Restructured execution order: GPU driver setup now runs last, after all packages are installed
+- Added automatic reboot checkpoint before driver setup (detects kernel mismatch from `dnf update`)
+- After rebooting, re-running the script skips completed steps and resumes at driver setup
+- This prevents kernel module builds against a stale kernel and avoids mid-script disruption from NVIDIA/MOK enrollment
+- Updated profile step ordering for gaming and creator profiles
 
 See [CHANGELOG.md](CHANGELOG.md) for the full history.
 
@@ -53,14 +54,14 @@ See [CHANGELOG.md](CHANGELOG.md) for the full history.
 
 ### Profiles
 
-| Profile       | What it installs                                    |
-| ------------- | --------------------------------------------------- |
-| `minimal`     | DNF config, fonts, shell                            |
-| `dev`         | Minimal + dev tools, Docker, Antigravity, KVM       |
-| `gaming`      | Minimal + GPU drivers, packages, Flatpaks, multimedia |
-| `workstation` | Dev + DNS, KVM/QEMU                                |
-| `creator`     | Gaming + multimedia, COPR tools                    |
-| `full`        | All steps (default)                                 |
+| Profile       | What it installs                                              |
+| ------------- | ------------------------------------------------------------- |
+| `minimal`     | DNF config, fonts, shell                                      |
+| `dev`         | Minimal + dev tools, Docker, Antigravity, KVM                 |
+| `gaming`      | Minimal + multimedia, packages, Flatpaks, GPU drivers (last)  |
+| `workstation` | Dev + DNS, KVM/QEMU                                          |
+| `creator`     | Gaming + multimedia, COPR tools, GPU drivers (last)           |
+| `full`        | All steps with driver setup and reboot check at the very end  |
 
 ---
 
@@ -124,6 +125,17 @@ KVM/QEMU, libvirt with socket activation, virt-manager, VirtIO drivers for Windo
 ### GNOME
 
 GNOME Tweaks, Extension Manager, extension recommendations.
+
+---
+
+## Testing
+
+The repository includes automated test suites covering all profiles, CLI arguments, helper functions, and backup/restore workflows:
+
+```bash
+# Run all test suites
+for t in tests/test_*.sh; do bash "$t"; done
+```
 
 ---
 
