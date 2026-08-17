@@ -168,7 +168,7 @@ Complete MOK enrollment on reboot (the blue "MOK Manager" screen).
 ## Getting Started
 
 ```bash
-git clone https://github.com/Kk376/fedora-post-install.git
+git clone https://github.com/kk376/fedora-post-install.git
 cd fedora-post-install
 chmod +x setup.sh
 ./setup.sh
