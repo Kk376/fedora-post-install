@@ -57,15 +57,15 @@ github_download() {
 
 set_zshrc_line() {
     local pattern="$1" desired="$2"
-    grep -qxF "$desired" ~/.zshrc 2>/dev/null && return 0
-    if grep -qE "$pattern" ~/.zshrc 2>/dev/null; then
+    grep -qxF "$desired" "$HOME/.zshrc" 2>/dev/null && return 0
+    if grep -qE "$pattern" "$HOME/.zshrc" 2>/dev/null; then
         PAT="$pattern" REPL="$desired" awk '
             BEGIN { pat = ENVIRON["PAT"]; repl = ENVIRON["REPL"] }
             $0 ~ pat { print repl; next }
             { print }
-        ' ~/.zshrc > ~/.zshrc.tmp && mv ~/.zshrc.tmp ~/.zshrc
+        ' "$HOME/.zshrc" > "$HOME/.zshrc.tmp" && mv "$HOME/.zshrc.tmp" "$HOME/.zshrc"
     fi
-    grep -qxF "$desired" ~/.zshrc 2>/dev/null || echo "$desired" >> ~/.zshrc
+    grep -qxF "$desired" "$HOME/.zshrc" 2>/dev/null || echo "$desired" >> "$HOME/.zshrc"
 }
 
 confirm() {
