@@ -349,22 +349,14 @@ setup_dnf() {
     if ! $DRY_RUN; then
         run_sudo sed -i '/^# BEGIN fedora-setup$/,/^# END fedora-setup$/d' /etc/dnf/dnf.conf
         
-        # DNF optimizations:
-        # - fastestmirror: Auto-select fastest mirror
-        # - max_parallel_downloads: Download 10 packages simultaneously
-        # - keepcache: Keep downloaded packages for reinstalls
-        # - best: Prefer newest package versions (version pinning)
-        # - install_weak_deps: Set to False for minimal installs (optional)
-        local dnf_opts="fastestmirror=True\nmax_parallel_downloads=10\nkeepcache=True\nbest=True"
-        confirm "Enable defaultyes (auto-confirm)?" "N" && dnf_opts+="\ndefaultyes=True"
-        
+        # Parallel downloads optimization
         run_sudo tee -a /etc/dnf/dnf.conf > /dev/null <<EOF
 # BEGIN fedora-setup
-$(echo -e "$dnf_opts")
+max_parallel_downloads=10
 # END fedora-setup
 EOF
     else
-        dry "Add fedora-setup block to dnf.conf (idempotent)"
+        dry "Add max_parallel_downloads=10 block to dnf.conf (idempotent)"
     fi
     
     # Atomic operation: Install RPM Fusion repos together
