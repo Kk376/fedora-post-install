@@ -67,7 +67,7 @@ else
 fi
 
 # 1.4 Steam and MangoHud profile gating logic check in setup_packages
-gating_check=$(sed -n '/setup_packages()/,/^}/p' "$SETUP_SCRIPT" | grep -E 'PROFILE.*==.*(gaming|workstation|creator|full)')
+gating_check=$(sed -n '/setup_packages()/,/^}/p' "$SETUP_SCRIPT" | grep -E 'is_gaming_profile|PROFILE.*==.*(gaming|workstation|creator|full)')
 if [[ -n "$gating_check" ]]; then
     pass "setup_packages() contains profile gate for gaming/workstation/creator/full"
 else
@@ -239,7 +239,8 @@ run_mock_setup_packages() {
         }
         sleep() { command sleep 0.05; }
 
-        # Extract setup_packages definition from setup.sh
+        # Extract is_gaming_profile and setup_packages definitions from setup.sh
+        eval "$(sed -n "/is_gaming_profile() {/,/^}/p" "$setup_script")"
         eval "$(sed -n "/setup_packages() {/,/^}/p" "$setup_script")"
 
         # Execute setup_packages
@@ -462,6 +463,7 @@ test_mangohud_content() {
         github_download() { touch "$3"; return 0; }
         sleep() { return 0; }
 
+        eval "$(sed -n "/is_gaming_profile() {/,/^}/p" "$setup_script")"
         eval "$(sed -n "/setup_packages() {/,/^}/p" "$setup_script")"
         setup_packages
     ' _ "$sandbox" "$SETUP_SCRIPT"
@@ -470,11 +472,9 @@ test_mangohud_content() {
     if [[ -f "$conf_file" ]]; then
         local content
         content=$(cat "$conf_file")
-        if grep -q "legacy_layout=false" "$conf_file" && \
-           grep -q "position=top-left" "$conf_file" && \
-           grep -q "fps" "$conf_file" && \
-           grep -q "gpu_stats" "$conf_file" && \
-           grep -q "cpu_stats" "$conf_file"; then
+        if grep -q "gpu_stats" "$conf_file" && \
+           grep -q "cpu_stats" "$conf_file" && \
+           grep -q "fps" "$conf_file"; then
             pass "MangoHud.conf content is valid and contains expected metrics"
         else
             fail "MangoHud.conf content missing expected metrics: $content"
@@ -503,7 +503,7 @@ else
     fail "Dry-run gaming profile missing Steam H264 unlock log"
 fi
 
-if echo "$dry_output" | grep -q "Create MangoHud.conf"; then
+if echo "$dry_output" | grep -q "MangoHud.conf"; then
     pass "Dry-run gaming profile logs MangoHud.conf creation"
 else
     fail "Dry-run gaming profile logs MangoHud.conf creation"

@@ -125,6 +125,14 @@ run_sudo() {
     fi
 }
 
+is_gaming_profile() {
+    [[ "$PROFILE" == "gaming" || "$PROFILE" == "workstation" || "$PROFILE" == "creator" || "$PROFILE" == "full" ]]
+}
+
+is_dev_profile() {
+    [[ "$PROFILE" == "dev" || "$PROFILE" == "full" ]]
+}
+
 # Download a release asset from GitHub.
 # Usage: github_download <owner/repo> <asset_pattern> <output_path> [fallback_url]
 # asset_pattern is a grep -E regex to match the asset filename.
@@ -138,6 +146,19 @@ github_download() {
     if [[ -n "$api_response" ]]; then
         if command -v jq &>/dev/null; then
             download_url=$(echo "$api_response" | jq -r ".assets[] | select(.name | test(\"$pattern\")) | .browser_download_url" 2>/dev/null | head -1 || true)
+        elif command -v python3 &>/dev/null; then
+            download_url=$(python3 -c "
+import sys, json, re
+try:
+    data = json.loads(sys.stdin.read())
+    pat = re.compile(sys.argv[1])
+    for a in data.get('assets', []):
+        if pat.search(a.get('name', '')):
+            print(a.get('browser_download_url', ''))
+            break
+except Exception:
+    pass
+" "$pattern" <<< "$api_response" 2>/dev/null || true)
         else
             download_url=$(echo "$api_response" | grep -oP '"browser_download_url":\s*"\K[^"]*' 2>/dev/null | grep -E "$pattern" 2>/dev/null | head -1 || true)
         fi
@@ -638,7 +659,7 @@ STARSHIP_CONFIG
 
         backup_file "$HOME/.zshrc"
 
-        if [[ "$PROFILE" == "dev" || "$PROFILE" == "full" ]]; then
+        if is_dev_profile; then
             log "Configuring developer .zshrc..."
             cat > "$HOME/.zshrc" <<'ZSHRC_DEV'
 # ===== Zsh History =====
@@ -1015,7 +1036,7 @@ setup_packages() {
         telegram-desktop vim neovim gh android-tools libva-utils gstreamer1-plugin-openh264
     )
 
-    if [[ "$PROFILE" == "gaming" || "$PROFILE" == "workstation" || "$PROFILE" == "creator" || "$PROFILE" == "full" ]]; then
+    if is_gaming_profile; then
         pkgs_to_install+=(steam mangohud)
     fi
 
@@ -1023,7 +1044,7 @@ setup_packages() {
 
     run_sudo dnf config-manager setopt fedora-cisco-openh264.enabled=1
 
-    if [[ "$PROFILE" == "gaming" || "$PROFILE" == "workstation" || "$PROFILE" == "creator" || "$PROFILE" == "full" ]]; then
+    if is_gaming_profile; then
         log "Unlocking Steam H264 codec..."
         if ! $DRY_RUN; then
             local unlock_pid
@@ -1048,100 +1069,102 @@ setup_packages() {
 
         if command -v mangohud &>/dev/null || $DRY_RUN; then
             if ! $DRY_RUN; then
-                mkdir -p ~/.config/MangoHud
+                mkdir -p "$HOME/.config/MangoHud"
                 backup_file "$HOME/.config/MangoHud/MangoHud.conf"
-                cat > ~/.config/MangoHud/MangoHud.conf <<'MANGOHUD'
-legacy_layout=false
-position=top-left
-font_size=32
-fps
-frametime
-frametime_color_change
+                cat > "$HOME/.config/MangoHud/MangoHud.conf" <<'EOF'
 gpu_stats
 gpu_temp
+gpu_core_clock
+gpu_mem_clock
+gpu_power
 cpu_stats
 cpu_temp
-ram
+cpu_mhz
+cpu_power
 vram
-MANGOHUD
-                info "MangoHud configured"
+ram
+fps
+frametime=1
+frame_timing=1
+hud_no_margin
+table_columns=3
+background_alpha=0.3
+font_size=20
+EOF
+                success "MangoHud config created"
             else
-                dry "Create MangoHud.conf"
+                dry "Create ~/.config/MangoHud/MangoHud.conf"
             fi
         fi
     fi
 
-    log "Installing Vesktop..."
     if ! $DRY_RUN; then
-        if command -v vesktop &>/dev/null || rpm -q vesktop &>/dev/null; then
-            info "Vesktop already installed"
-        else
-            local arch
-            arch="$(uname -m)"
-            local fallback_url=""
-            local latest_tag
-            latest_tag=$(curl -sIL "https://github.com/Vencord/Vesktop/releases/latest" 2>/dev/null | grep -i "^location:" | sed -E 's/.*tag\/(v[0-9.]+).*/\1/' | tr -d '\r\n' || true)
-            if [[ -n "$latest_tag" ]]; then
-                local ver="${latest_tag#v}"
-                fallback_url="https://github.com/Vencord/Vesktop/releases/download/${latest_tag}/vesktop-${ver}.${arch}.rpm"
-            fi
-
-            if github_download "Vencord/Vesktop" "vesktop.*\\.${arch}\\.rpm" "/tmp/vesktop.rpm" "$fallback_url"; then
-                if run_sudo dnf install -y /tmp/vesktop.rpm 2>/dev/null; then
-                    success "Vesktop installed"
-                else
-                    warn "Vesktop RPM install failed"
-                fi
-                rm -f /tmp/vesktop.rpm
+        local arch
+        arch=$(uname -m)
+        local fallback_url="https://github.com/Vencord/Vesktop/releases/download/v1.5.3/vesktop-1.5.3.${arch}.rpm"
+        log "Downloading Vesktop RPM..."
+        if github_download "Vencord/Vesktop" "vesktop.*\.${arch}\.rpm" "/tmp/vesktop.rpm" "$fallback_url"; then
+            if run_sudo dnf install -y /tmp/vesktop.rpm 2>/dev/null; then
+                success "Vesktop installed"
             else
-                warn "Failed to download Vesktop RPM — install manually from https://github.com/Vencord/Vesktop/releases"
+                warn "Vesktop install failed"
             fi
+            run rm -f /tmp/vesktop.rpm
+        else
+            warn "Failed to download Vesktop"
+            info "Manual install: https://github.com/Vencord/Vesktop/releases"
         fi
     else
         dry "Download and install Vesktop RPM from GitHub Releases"
     fi
 
-    step_complete "Packages installed"
+    step_complete "Essential packages installed"
 }
 
 # ==============================================================================
-# Development Tools
+# Development Tools & Compilers
 # ==============================================================================
 setup_dev() {
-    log "Installing dev tools..."
-    run_sudo dnf install -y bc bison ccache curl flex git git-lfs gnupg gperf ImageMagick protobuf-compiler \
-        python3-protobuf libxml2 libxslt lzop lz4 pngcrush rsync schedtool squashfs-tools zip \
-        openssl-devel zlib-devel elfutils-libelf-devel elfutils-devel gnutls-devel sdl12-compat-devel \
-        glibc-devel.i686 libstdc++-devel.i686 zlib-ng-compat-devel.i686 libX11-devel.i686 readline-devel.i686 ncurses-devel.i686 \
-        meson ninja-build automake autoconf libtool pkg-config cmake-gui cmake-fedora gdb valgrind strace ltrace clang-tools-extra bear \
-        python3-devel python3-virtualenv python3-wheel python3-setuptools
+    log "Installing dev tools & libraries..."
 
-    if command -v ccache &>/dev/null; then
+    local dev_pkgs=(
+        meson ninja-build automake autoconf libtool pkg-config bear
+        gdb valgrind strace ltrace clang-tools-extra
+        bc bison flex gperf protobuf-compiler python3-protobuf libxml2 libxslt
+        ImageMagick git-lfs gnupg lzop lz4 pngcrush rsync schedtool squashfs-tools zip
+        python3-devel python3-virtualenv python3-wheel python3-setuptools
+        openssl-devel zlib-devel elfutils-libelf-devel elfutils-devel gnutls-devel sdl12-compat-devel
+        glibc-devel.i686 libstdc++-devel.i686 zlib-ng-compat-devel.i686 libX11-devel.i686 readline-devel.i686 ncurses-devel.i686
+    )
+
+    run_sudo dnf install -y --skip-unavailable "${dev_pkgs[@]}"
+
+    if confirm "Install full Rust toolchain (rustup, clippy, rust-analyzer)?" "Y"; then
+        run_sudo dnf install -y rust cargo rustup rustfmt clippy rust-analyzer 2>/dev/null || true
+    fi
+
+    if command -v ccache &>/dev/null || $DRY_RUN; then
         if ! $DRY_RUN; then
-            ccache --set-config=max_size=50G && ccache --set-config=compression=true
-            mkdir -p ~/.ccache
-            grep -qx "cache_dir = $HOME/.ccache" ~/.ccache/ccache.conf 2>/dev/null || \
-                echo "cache_dir = $HOME/.ccache" >> ~/.ccache/ccache.conf
-            info "ccache configured: 50G max, compression enabled"
+            ccache --set-config=max_size=50G 2>/dev/null || true
+            ccache --set-config=compression=true 2>/dev/null || true
+            mkdir -p "$HOME/.ccache"
+            echo "cache_dir = $HOME/.ccache" > "$HOME/.ccache/ccache.conf"
+            success "ccache configured (50GB limit, compressed)"
         else
-            dry "Configure ccache: 50G max, compression enabled"
+            dry "Configure ccache: 50GB max size, compression enabled"
         fi
     fi
 
-    confirm "Install Rust toolchain?" "N" && run_sudo dnf install -y rust cargo rustup rustfmt clippy rust-analyzer
-
-    if command -v npm >/dev/null; then
+    if command -v npm &>/dev/null; then
+        log "Enabling corepack (yarn/pnpm)..."
         run_sudo npm install -g corepack 2>/dev/null || true
         run_sudo corepack enable 2>/dev/null || true
-        info "Corepack enabled"
     fi
 
+    log "Installing Google Antigravity CLI..."
     if ! $DRY_RUN; then
-        if command -v agy &>/dev/null; then
-            info "Antigravity CLI (agy) already installed"
-        elif curl -fsSL https://antigravity.google/cli/install.sh | bash 2>/dev/null; then
-            success "Antigravity CLI (agy) installed"
-        else
+        if ! command -v agy &>/dev/null; then
+            curl -fsSL https://antigravity.google/cli/install.sh | bash 2>/dev/null || \
             warn "Antigravity CLI install failed - try manually: curl -fsSL https://antigravity.google/cli/install.sh | bash"
         fi
     else
@@ -1156,8 +1179,6 @@ setup_dev() {
 # ==============================================================================
 setup_antigravity() {
     log "Installing Antigravity..."
-    warn "Antigravity's Fedora/RHEL repo ships with gpgcheck=0 (Google's own install docs, not just this script)"
-    info "Their APT instructions publish a signing key; their DNF/YUM instructions currently don't - you're trusting HTTPS+Google's infra here, not GPG package signing"
     if ! $DRY_RUN; then
         run_sudo tee /etc/yum.repos.d/antigravity.repo > /dev/null <<'EOL'
 [antigravity-rpm]
@@ -1171,13 +1192,6 @@ EOL
         else
             warn "Failed to refresh Antigravity repo metadata"
         fi
-    else
-        dry "Add Antigravity repo and install antigravity"
-    fi
-
-    if ! $DRY_RUN && command -v antigravity >/dev/null; then
-        log "Installing Antigravity extensions..."
-        antigravity --install-extension bradlc.vscode-tailwindcss --install-extension catppuccin.catppuccin-vsc --install-extension christian-kohler.npm-intellisense --install-extension dbaeumer.vscode-eslint --install-extension devsense.composer-php-vscode --install-extension devsense.intelli-php-vscode --install-extension devsense.phptools-vscode --install-extension devsense.profiler-php-vscode --install-extension dsznajder.es7-react-js-snippets --install-extension eamodio.gitlens --install-extension esbenp.prettier-vscode --install-extension formulahendry.code-runner --install-extension golang.go --install-extension hbenl.vscode-mocha-test-adapter --install-extension hbenl.vscode-test-explorer --install-extension llvm-vs-code-extensions.vscode-clangd --install-extension meta.pyrefly --install-extension ms-azuretools.vscode-containers --install-extension ms-azuretools.vscode-docker --install-extension ms-pyright.pyright --install-extension ms-python.debugpy --install-extension ms-python.python --install-extension ms-python.vscode-python-envs --install-extension ms-vscode.cmake-tools --install-extension ms-vscode.cpptools-themes --install-extension ms-vscode.live-server --install-extension ms-vscode.test-adapter-converter --install-extension ms-vscode.vscode-typescript-next --install-extension redhat.java --install-extension shopify.ruby-lsp --install-extension vscjava.vscode-gradle --install-extension vscjava.vscode-java-debug --install-extension vscjava.vscode-java-dependency --install-extension vscjava.vscode-java-pack --install-extension vscjava.vscode-java-test --install-extension vscjava.vscode-maven --install-extension vscode-icons-team.vscode-icons 2>/dev/null || warn "Some extensions failed"
 
         log "Creating Antigravity settings..."
         mkdir -p "$HOME/.config/Antigravity/User"
@@ -1195,8 +1209,8 @@ EOL
 }
 SETTINGS
         success "Antigravity settings created"
-    elif $DRY_RUN; then
-        dry "Install Antigravity extensions and create settings.json"
+    else
+        dry "Add Antigravity repo and create settings.json"
     fi
     step_complete "Antigravity configured"
 }

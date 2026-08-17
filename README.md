@@ -132,7 +132,7 @@ The repository includes automated test suites covering all profiles, CLI argumen
 
 ```bash
 # Run all test suites
-for t in tests/test_*.sh; do bash "$t"; done
+bash tests/run_tests.sh
 ```
 
 ---
