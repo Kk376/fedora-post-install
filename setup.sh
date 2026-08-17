@@ -448,7 +448,14 @@ setup_nosleep() {
     log "Disabling auto-sleep..."
 
     if ! $DRY_RUN; then
-        run_sudo mkdir -p /etc/dconf/db/gdm.d
+        run_sudo mkdir -p /etc/dconf/profile /etc/dconf/db/gdm.d
+        if [[ ! -f /etc/dconf/profile/gdm ]]; then
+            run_sudo tee /etc/dconf/profile/gdm > /dev/null <<'EOF'
+user-db:user
+system-db:gdm
+file-db:/usr/share/gdm/greeter-dconf-defaults
+EOF
+        fi
         run_sudo tee /etc/dconf/db/gdm.d/01-power > /dev/null <<'EOF'
 [org/gnome/settings-daemon/plugins/power]
 sleep-inactive-ac-timeout=0
