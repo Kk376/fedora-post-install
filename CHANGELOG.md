@@ -4,6 +4,26 @@ All notable changes to this project will be documented in this file.
 
 Follows semantic versioning: MAJOR.MINOR.PATCH
 
+## [v5.2.0] – 2026-08-18
+
+### Changed
+
+- Replaced Oh My Zsh and Powerlevel10k with Starship prompt (`starship`) and standalone ZSH plugins (`zsh-autosuggestions`, `zsh-syntax-highlighting`), deploying a pre-configured `~/.config/starship.toml` and clean `.zshrc`
+- Enabled DNS configuration (`setup_dns`) across all profiles (`minimal`, `dev`, `gaming`, `workstation`, `creator`, `full`) with an informational banner explaining benefits and network considerations (default: Cloudflare 1.1.1.1, option 2: Google 8.8.8.8)
+- Refactored GDM login screen no-sleep settings to write `/etc/dconf/db/gdm.d/01-power` and run `dconf update`, eliminating D-Bus session and SELinux permission errors from `sudo -u gdm dbus-run-session`
+- Filtered Steam and MangoHud package installation, Steam H.264 codec unlock, and `MangoHud.conf` deployment to gaming and desktop profiles (`gaming`, `workstation`, `creator`, `full`), skipping them on headless and minimal profiles
+- Standardized all six profiles to uniformly include the pre-driver reboot checkpoint (`setup_pre_driver_reboot`) and GPU driver setup (`setup_drivers`) at the end of their execution flow
+
+### Added
+
+- Comprehensive Secure Boot and MOK enrollment guidance and disclaimer in `setup_drivers` detailing manual signing steps, `akmods` local key management, and UEFI firmware update handling
+- Custom developer `.zshrc` profile with WSL Antigravity IDE (`anti`) helper, NVM integration, and history optimizations
+
+### Removed
+
+- Removed obsolete COPR repository for `eza` in `setup_copr()` as it is available directly in Fedora's official repositories and installed via `setup_packages()`
+- Removed Cloudflare Warp step (`setup_warp`) and associated summary checks to streamline setup and avoid upstream repository instability
+
 ---
 
 ## [v5.1.0] – 2026-08-17

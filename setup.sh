@@ -1,7 +1,7 @@
 #!/bin/bash
 # Fedora 44 Post-Install Setup Script
 # Author: Kushagra Kumar
-# Version: 5.0.3
+# Version: 5.2.0
 
 set -euo pipefail
 
@@ -11,7 +11,7 @@ set -euo pipefail
 DRY_RUN=false
 BACKUP_DIR="$HOME/.config/fedora-setup-backups/$(date +%Y%m%d_%H%M%S)"
 LOG_FILE="/tmp/fedora-setup-$(date +%Y%m%d_%H%M%S).log"
-SCRIPT_VERSION="5.1.0"
+SCRIPT_VERSION="5.2.0"
 PROFILE="full"
 FORCE_RERUN=false
 STATE_FILE="$HOME/.config/fedora-setup/state.txt"
@@ -28,6 +28,10 @@ while [[ $# -gt 0 ]]; do
             shift
             ;;
         --profile)
+            if [[ $# -lt 2 ]]; then
+                echo "Error: Option --profile requires an argument." >&2
+                exit 1
+            fi
             PROFILE="$2"
             shift 2
             ;;
@@ -43,11 +47,11 @@ while [[ $# -gt 0 ]]; do
             echo "Options:"
             echo "  --dry-run, -n          Preview changes without executing"
             echo "  --profile=PROFILE      Choose setup profile:"
-            echo "                           minimal     - DNF, fonts, shell only"
-            echo "                           dev         - Minimal + dev tools, Docker, Antigravity"
-            echo "                           gaming      - Minimal + drivers, packages, Flatpaks"
-            echo "                           workstation - Dev + DNS, KVM/QEMU"
-            echo "                           creator     - Gaming + Multimedia, COPR tools"
+            echo "                           minimal     - DNF, DNS, fonts, shell, browser/codecs"
+            echo "                           dev         - Complete dev stack, Docker, Antigravity, KVM"
+            echo "                           gaming      - Multimedia, Steam, MangoHud, Flatpaks, GPU drivers"
+            echo "                           workstation - Productive desktop, Steam, KVM, GPU drivers"
+            echo "                           creator     - Gaming + COPR tools (Yazi, Scrcpy)"
             echo "                           full        - All steps (default)"
             echo "  --force, -f            Re-run completed steps"
             echo "  --help, -h             Show this help message"
@@ -132,12 +136,12 @@ github_download() {
     local download_url=""
     local api_response
 
-    api_response=$(curl -sfL --max-time 10 "$api_url" 2>/dev/null)
+    api_response=$(curl -sfL --max-time 10 "$api_url" 2>/dev/null || true)
     if [[ -n "$api_response" ]]; then
         if command -v jq &>/dev/null; then
-            download_url=$(echo "$api_response" | jq -r ".assets[] | select(.name | test(\"$pattern\")) | .browser_download_url" 2>/dev/null | head -1)
+            download_url=$(echo "$api_response" | jq -r ".assets[] | select(.name | test(\"$pattern\")) | .browser_download_url" 2>/dev/null | head -1 || true)
         else
-            download_url=$(echo "$api_response" | grep -oP '"browser_download_url":\s*"\K[^"]*' | grep -E "$pattern" | head -1)
+            download_url=$(echo "$api_response" | grep -oP '"browser_download_url":\s*"\K[^"]*' 2>/dev/null | grep -E "$pattern" 2>/dev/null | head -1 || true)
         fi
     fi
 
@@ -392,24 +396,31 @@ setup_dns() {
         return 0
     fi
     
-    warn "⚠️  DNS Configuration Warning"
-    echo "This will override auto DNS for ALL active connections."
-    echo "Risks:"
-    echo "  • May break corporate/campus networks"
-    echo "  • May break VPN split DNS"
-    echo "  • May break DNS-over-TLS/DNSSEC setups"
-    echo "DNS Options:"
-    echo "  1. Google DNS (8.8.8.8, 8.8.4.4)"
-    echo "  2. Cloudflare DNS (1.1.1.1, 1.0.0.1)"
+    echo ""
+    log "DNS Configuration"
+    echo "Custom DNS replaces your ISP's default DNS with fast, private resolvers."
+    echo "Benefits: Faster domain lookups and bypasses ISP-level website blocking/tampering."
+    echo "Note: May conflict with internal corporate VPNs or college login portals."
+    echo ""
+    if ! confirm "Would you like to configure custom DNS?" "Y"; then
+        info "Keeping default DHCP/ISP DNS settings"
+        step_complete "DNS (skipped)"
+        return 0
+    fi
+    
+    echo "Choose a DNS provider:"
+    echo "  1. Cloudflare DNS (1.1.1.1, 1.0.0.1)"
+    echo "  2. Google DNS (8.8.8.8, 8.8.4.4)"
     echo "  3. Skip (keep current DNS)"
     
     local dns_choice DNS_IPV4 DNS_IPV6 DNS_NAME
-    read -p "Choose DNS provider [1/2/3] (default: 3): " -n 1 dns_choice
+    read -p "Select [1/2/3] (default: 1): " -n 1 -r dns_choice
+    echo ""
     
     case "$dns_choice" in
-        1) DNS_IPV4="8.8.8.8 8.8.4.4"; DNS_IPV6="2001:4860:4860::8888 2001:4860:4860::8844"; DNS_NAME="Google" ;;
-        2) DNS_IPV4="1.1.1.1 1.0.0.1"; DNS_IPV6="2606:4700:4700::1111 2606:4700:4700::1001"; DNS_NAME="Cloudflare" ;;
-        *) info "Keeping current DNS settings"; step_complete "DNS (skipped)"; return 0 ;;
+        2) DNS_IPV4="8.8.8.8 8.8.4.4"; DNS_IPV6="2001:4860:4860::8888 2001:4860:4860::8844"; DNS_NAME="Google" ;;
+        3) info "Keeping current DNS settings"; step_complete "DNS (skipped)"; return 0 ;;
+        *) DNS_IPV4="1.1.1.1 1.0.0.1"; DNS_IPV6="2606:4700:4700::1111 2606:4700:4700::1001"; DNS_NAME="Cloudflare" ;;
     esac
     
     log "Configuring $DNS_NAME DNS..."
@@ -425,7 +436,7 @@ setup_dns() {
         log "Setting DNS for: $conn"
         nmcli connection modify "$conn" ipv4.ignore-auto-dns yes ipv4.dns "$DNS_IPV4" 2>/dev/null || warn "Failed to set IPv4 DNS for $conn"
         nmcli connection modify "$conn" ipv6.ignore-auto-dns yes ipv6.dns "$DNS_IPV6" 2>/dev/null || warn "Failed to set IPv6 DNS for $conn"
-        nmcli connection down "$conn" 2>/dev/null; sleep 1; nmcli connection up "$conn" 2>/dev/null || warn "Failed to restart $conn"
+        nmcli connection down "$conn" 2>/dev/null || true; sleep 1; nmcli connection up "$conn" 2>/dev/null || warn "Failed to restart $conn"
     done <<< "$conns"
     step_complete "$DNS_NAME DNS configured"
 }
@@ -473,9 +484,23 @@ EOF
 # ==============================================================================
 setup_nosleep() {
     log "Disabling auto-sleep..."
-    run_sudo mkdir -p /var/lib/gdm/.config/dconf
-    run_sudo chown -R gdm:gdm /var/lib/gdm/.config && run_sudo chmod 0700 /var/lib/gdm/.config
+    
+    # 1. GDM login screen (clean system keyfile, zero SELinux/permission issues)
+    if ! $DRY_RUN; then
+        run_sudo mkdir -p /etc/dconf/db/gdm.d
+        run_sudo tee /etc/dconf/db/gdm.d/01-power > /dev/null <<'EOF'
+[org/gnome/settings-daemon/plugins/power]
+sleep-inactive-ac-timeout=0
+sleep-inactive-ac-type='nothing'
+sleep-inactive-battery-timeout=0
+sleep-inactive-battery-type='nothing'
+EOF
+        run_sudo dconf update 2>/dev/null || true
+    else
+        dry "Create /etc/dconf/db/gdm.d/01-power and run dconf update"
+    fi
 
+    # 2. User session power settings
     local keys=(
         "sleep-inactive-ac-timeout 0"
         "sleep-inactive-ac-type nothing"
@@ -484,7 +509,6 @@ setup_nosleep() {
     )
     for entry in "${keys[@]}"; do
         local key=${entry%% *} val=${entry#* }
-        run_sudo -u gdm dbus-run-session gsettings set org.gnome.settings-daemon.plugins.power "$key" "$val" 2>/dev/null || true
         run gsettings set org.gnome.settings-daemon.plugins.power "$key" "$val" 2>/dev/null || true
     done
 
@@ -492,48 +516,271 @@ setup_nosleep() {
 }
 
 # ==============================================================================
-# ZSH + Oh My Zsh + Powerlevel10k
+# ZSH + Starship
 # ==============================================================================
 setup_shell() {
-    log "Installing ZSH..."
-    run_sudo dnf install -y zsh curl git fontconfig
+    log "Installing ZSH & Starship..."
+    run_sudo dnf install -y --skip-unavailable zsh curl git fontconfig
     
-    if ! $DRY_RUN; then
-        [[ ! -d "$HOME/.oh-my-zsh" ]] && sh -c "$(curl -fsSL https://raw.githubusercontent.com/ohmyzsh/ohmyzsh/master/tools/install.sh)" "" --unattended
-        
-        run git clone --depth=1 https://github.com/romkatv/powerlevel10k.git "${ZSH_CUSTOM:-$HOME/.oh-my-zsh/custom}/themes/powerlevel10k" 2>/dev/null || true
-        run git clone https://github.com/zsh-users/zsh-autosuggestions "${ZSH_CUSTOM:-$HOME/.oh-my-zsh/custom}/plugins/zsh-autosuggestions" 2>/dev/null || true
-        run git clone https://github.com/zsh-users/zsh-syntax-highlighting "${ZSH_CUSTOM:-$HOME/.oh-my-zsh/custom}/plugins/zsh-syntax-highlighting" 2>/dev/null || true
-    else
-        dry "Install Oh My ZSH, Powerlevel10k, plugins"
+    if ! command -v starship &>/dev/null && ! $DRY_RUN; then
+        if ! run_sudo dnf install -y --skip-unavailable starship 2>/dev/null; then
+            log "Installing Starship via official installer..."
+            curl -sS https://starship.rs/install.sh | sh -s -- -y >/dev/null 2>&1 || true
+        fi
     fi
     
-    # Backup .zshrc using backup system
-    backup_file "$HOME/.zshrc"
-    
     if ! $DRY_RUN; then
-        set_zshrc_line 'ZSH_THEME=' 'ZSH_THEME="powerlevel10k/powerlevel10k"'
-        set_zshrc_line '^plugins=' 'plugins=(git zsh-autosuggestions zsh-syntax-highlighting)'
+        mkdir -p "$HOME/.zsh/plugins" "$HOME/.config"
         
-        cat >> ~/.zshrc <<'EOF'
+        [[ ! -d "$HOME/.zsh/plugins/zsh-autosuggestions" ]] && run git clone https://github.com/zsh-users/zsh-autosuggestions "$HOME/.zsh/plugins/zsh-autosuggestions" 2>/dev/null || true
+        [[ ! -d "$HOME/.zsh/plugins/zsh-syntax-highlighting" ]] && run git clone https://github.com/zsh-users/zsh-syntax-highlighting "$HOME/.zsh/plugins/zsh-syntax-highlighting" 2>/dev/null || true
+        
+        # Deploy Starship configuration
+        backup_file "$HOME/.config/starship.toml"
+        cat > "$HOME/.config/starship.toml" <<'STARSHIP_CONFIG'
+"$schema" = 'https://starship.rs/config-schema.json'
 
-# --- Custom Configs ---
+format = """
+╭─ $os\
+$username\
+$directory\
+$git_branch\
+$git_status\
+$rust\
+$python\
+$nodejs\
+$golang\
+$c\
+$docker_context\
+$cmd_duration\
+$time
+╰─$character """
+
+[os]
+disabled = false
+style = "bold blue"
+format = "[$symbol]($style) "
+
+[os.symbols]
+Windows = ""
+Ubuntu = "󰕈"
+SUSE = ""
+Raspbian = "󰐿"
+Mint = "󰣭"
+Macos = "󰀵"
+Manjaro = ""
+Linux = "󰌽"
+Gentoo = "󰣨"
+Fedora = "󰣛"
+Alpine = ""
+Amazon = ""
+Android = ""
+Arch = "󰣇"
+Debian = "󰣚"
+Redhat = "󱄛"
+
+[username]
+show_always = false
+style_user = "bold blue"
+style_root = "bold red"
+format = '[$user]($style) in '
+
+[directory]
+style = "bold cyan"
+format = "[$path]($style) "
+truncation_length = 0
+truncate_to_repo = false
+
+[directory.substitutions]
+"Documents" = "󰈙 "
+"Downloads" = " "
+"Music" = "󰝚 "
+"Pictures" = " "
+"Developer" = "󰲋 "
+
+[git_branch]
+symbol = " "
+style = "bold purple"
+format = "on [$symbol$branch]($style) "
+
+[git_status]
+style = "bold red"
+format = '([\[$all_status$ahead_behind\]]($style) )'
+conflicted = "󰞇 "
+ahead = "⇡${count}"
+behind = "⇣${count}"
+diverged = "⇕⇡${ahead_count}⇣${behind_count}"
+up_to_date = ""
+untracked = "?${count}"
+stashed = "󰆓 "
+modified = "!${count}"
+staged = "+${count}"
+renamed = "»${count}"
+deleted = "✘${count}"
+
+[rust]
+symbol = " "
+style = "bold red"
+format = "via [$symbol($version )]($style) "
+
+[python]
+symbol = " "
+style = "bold yellow"
+format = 'via [${symbol}${pyenv_prefix}(${version} )(\($virtualenv\) )]($style) '
+
+[nodejs]
+symbol = " "
+style = "bold green"
+format = "via [$symbol($version )]($style) "
+
+[golang]
+symbol = " "
+style = "bold cyan"
+format = "via [$symbol($version )]($style) "
+
+[c]
+symbol = " "
+style = "bold blue"
+format = "via [$symbol($version )]($style) "
+
+[docker_context]
+symbol = " "
+style = "bold blue"
+format = "via [$symbol$context]($style) "
+
+[cmd_duration]
+min_time = 2_000
+show_milliseconds = false
+style = "bold yellow"
+format = "took [$duration]($style) "
+
+[time]
+disabled = false
+time_format = "%R"
+style = "dimmed white"
+format = "at [$time]($style) "
+
+[character]
+disabled = false
+success_symbol = "[❯](bold green)"
+error_symbol = "[❯](bold red)"
+vimcmd_symbol = "[❮](bold green)"
+vimcmd_replace_one_symbol = "[❮](bold purple)"
+vimcmd_replace_symbol = "[❮](bold purple)"
+vimcmd_visual_symbol = "[❮](bold yellow)"
+STARSHIP_CONFIG
+
+        # Backup existing .zshrc
+        backup_file "$HOME/.zshrc"
+
+        if [[ "$PROFILE" == "dev" || "$PROFILE" == "full" ]]; then
+            log "Configuring developer .zshrc..."
+            cat > "$HOME/.zshrc" <<'ZSHRC_DEV'
+# ===== Zsh History =====
+HISTFILE=~/.zsh_history
+HISTSIZE=10000
+SAVEHIST=10000
+
+setopt APPEND_HISTORY
+setopt SHARE_HISTORY
+setopt INC_APPEND_HISTORY
+setopt HIST_IGNORE_DUPS
+setopt HIST_IGNORE_SPACE
+setopt HIST_REDUCE_BLANKS
+
+# Ctrl + Left / Right navigation
+bindkey '^[[;5D' backward-word
+bindkey '^[[;5C' forward-word
+
+# ===== Zsh Autosuggestions color =====
 ZSH_AUTOSUGGEST_HIGHLIGHT_STYLE="fg=#8a8a8a"
 
-# bat alias
-command -v bat &>/dev/null && alias cat='bat --paging=never --style=plain'
+# ===== Zsh plugins (manual) =====
+[[ -f ~/.zsh/plugins/zsh-autosuggestions/zsh-autosuggestions.zsh ]] && source ~/.zsh/plugins/zsh-autosuggestions/zsh-autosuggestions.zsh
+[[ -f ~/.zsh/plugins/zsh-syntax-highlighting/zsh-syntax-highlighting.zsh ]] && source ~/.zsh/plugins/zsh-syntax-highlighting/zsh-syntax-highlighting.zsh
 
-# eza alias
-command -v eza &>/dev/null && alias ls='eza --group-directories-first --classify --icons --git'
+# ===== Aliases =====
+alias ls='eza --group-directories-first --classify --icons --git'
+alias cat='bat --paging=never --style=plain'
 
-EOF
+# ===== Antigravity IDE (WSL Remote) =====
+anti() {
+  if [[ -z "$WSL_DISTRO_NAME" ]]; then
+    echo "❌ anti: This command must be run inside WSL"
+    return 1
+  fi
+
+  local WIN_USER
+  WIN_USER=$(cmd.exe /c "echo %USERNAME%" 2>/dev/null | tr -d '\r')
+
+  local IDE_EXE="/mnt/c/Users/$WIN_USER/AppData/Local/Programs/Antigravity IDE/Antigravity IDE.exe"
+
+  if [[ ! -f "$IDE_EXE" ]]; then
+    echo "❌ Antigravity IDE not found at:"
+    echo "   $IDE_EXE"
+    return 1
+  fi
+
+  # Resolve target path (default: current dir)
+  local LINUX_PATH
+  LINUX_PATH="$(realpath "${1:-.}")"
+
+  # Launch Antigravity IDE connected to WSL
+  "$IDE_EXE" --remote "wsl+$WSL_DISTRO_NAME" "$LINUX_PATH" &>/dev/null &
+  disown
+}
+
+# ===== Environment & PATH =====
+export PATH="$HOME/.local/bin:$PATH"
+
+# ===== NVM =====
+export NVM_DIR="$HOME/.nvm"
+[ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"  # This loads nvm
+[ -s "$NVM_DIR/bash_completion" ] && \. "$NVM_DIR/bash_completion"  # This loads nvm bash_completion
+
+# ===== Starship (ALWAYS LAST) =====
+eval "$(starship init zsh)"
+ZSHRC_DEV
+        else
+            log "Configuring standard .zshrc..."
+            cat > "$HOME/.zshrc" <<'ZSHRC_NORMAL'
+# ===== Zsh History =====
+HISTFILE=~/.zsh_history
+HISTSIZE=10000
+SAVEHIST=10000
+
+setopt APPEND_HISTORY
+setopt SHARE_HISTORY
+setopt INC_APPEND_HISTORY
+setopt HIST_IGNORE_DUPS
+setopt HIST_IGNORE_SPACE
+setopt HIST_REDUCE_BLANKS
+
+# Ctrl + Left / Right navigation
+bindkey '^[[;5D' backward-word
+bindkey '^[[;5C' forward-word
+
+# ===== Zsh Autosuggestions color =====
+ZSH_AUTOSUGGEST_HIGHLIGHT_STYLE="fg=#8a8a8a"
+
+# ===== Zsh plugins (manual) =====
+[[ -f ~/.zsh/plugins/zsh-autosuggestions/zsh-autosuggestions.zsh ]] && source ~/.zsh/plugins/zsh-autosuggestions/zsh-autosuggestions.zsh
+[[ -f ~/.zsh/plugins/zsh-syntax-highlighting/zsh-syntax-highlighting.zsh ]] && source ~/.zsh/plugins/zsh-syntax-highlighting/zsh-syntax-highlighting.zsh
+
+# ===== Aliases =====
+alias ls='eza --group-directories-first --classify --icons --git'
+alias cat='bat --paging=never --style=plain'
+
+# ===== Starship (ALWAYS LAST) =====
+eval "$(starship init zsh)"
+ZSHRC_NORMAL
+        fi
     else
-        dry "Configure .zshrc with theme and plugins"
+        dry "Install Starship, clone plugins, deploy starship.toml and .zshrc"
     fi
     
     confirm "Set ZSH as default shell?" "Y" && run chsh -s "$(command -v zsh)"
     
-
     step_complete "Shell configured"
 }
 
@@ -607,9 +854,18 @@ setup_pre_driver_reboot() {
 # Smart Driver Detection
 # ==============================================================================
 setup_drivers() {
+    # Prompt for minimal profile
+    if [[ "$PROFILE" == "minimal" ]]; then
+        if ! confirm "Configure GPU drivers?" "N"; then
+            info "Skipping GPU driver setup for minimal profile"
+            step_complete "Drivers (skipped)"
+            return 0
+        fi
+    fi
+
     log "Detecting Hardware..."
     
-    local CHASSIS GPU_NVIDIA GPU_AMD GPU_INTEL SB_STATE
+    local CHASSIS GPU_NVIDIA GPU_AMD GPU_INTEL
     CHASSIS=$(hostnamectl chassis 2>/dev/null || echo "unknown")
     # More specific GPU detection to avoid false positives
     GPU_NVIDIA=$(lspci | grep -Ei 'VGA|3D|Display' | grep -i nvidia || true)
@@ -638,14 +894,14 @@ setup_drivers() {
         # Common Nvidia Packages
         run_sudo dnf install -y kmodtool akmods mokutil openssl nvtop akmod-nvidia xorg-x11-drv-nvidia-cuda libva-nvidia-driver
         
-        # Force build and verify modules before MOK enrollment
+        # Force build and verify modules
         log "Building NVIDIA kernel modules (this may take a few minutes)..."
         run_sudo akmods --force
         
         if modinfo nvidia &>/dev/null; then
             success "NVIDIA module built successfully"
         else
-            warn "NVIDIA module not yet available - may require reboot after MOK enrollment"
+            warn "NVIDIA module not yet available - will build during boot"
         fi
         
         if [[ "$CHASSIS" == "laptop" || "$CHASSIS" == "notebook" || "$CHASSIS" == "convertible" ]]; then
@@ -657,42 +913,57 @@ setup_drivers() {
             fi
         fi
         
-        log "Generating Secure Boot keys..."
-        run_sudo kmodgenca -a
-        
-        warn "⚠️  SECURE BOOT ENROLLMENT REQUIRED ⚠️"
-        echo "NVIDIA drivers require Secure Boot enrollment."
         echo ""
-        echo "PREREQUISITE: Secure Boot must be ENABLED in your BIOS/UEFI."
-        echo "If not enabled, stop this script using ctrl+c and do this BEFORE proceeding:"
-        echo "1. Enter BIOS/UEFI"
-        echo "2. Find Secure Boot option"
-        echo "3. Enable it, save, and reboot to Linux"
+        echo "================================================================================"
+        echo "                      SECURE BOOT & NVIDIA DRIVER SIGNING                      "
+        echo "================================================================================"
+        echo "Secure Boot is an EFI firmware security feature required by modern systems."
+        echo "Fedora's akmods automatically signs locally built kernel modules with a self-"
+        echo "generated key, which must be imported into your EFI firmware (MOK)."
         echo ""
-        
-        # Check current Secure Boot state
-        SB_STATE=$(run_sudo mokutil --sb-state 2>/dev/null | grep -i "secureboot" || echo "unknown")
-        
-        if echo "$SB_STATE" | grep -qi "enabled"; then
-            info "Secure Boot is currently ENABLED."
-            if confirm "Do you want to enroll the NVIDIA driver key now?" "N"; then
-                warn "IMPORTANT: Remember the password you set! You'll need it during next boot!"
-                run_sudo mokutil --import /etc/pki/akmods/certs/public_key.der
-                echo ""
-                echo "✅ Key enrolled. Next steps after reboot:"
-                echo "1. You'll see a BLUE 'MOK Manager' screen"
-                echo "2. Select 'Enroll MOK' → 'Continue' → 'Yes'"
-                echo "3. Enter the password you just set"
-                echo "4. Select 'Reboot'"
-                echo ""
-                warn "The system will NOT load NVIDIA drivers until MOK enrollment is complete!"
-            fi
-        else
-            warn "Secure Boot appears to be DISABLED or in an unknown state."
-            echo "Check with: sudo mokutil --sb-state"
-            echo "Enable Secure Boot in BIOS first, then re-run this step or enroll manually."
-            echo "Manual enrollment: sudo mokutil --import /etc/pki/akmods/certs/public_key.der"
-        fi
+        echo "You DO NOT need to disable Secure Boot or switch to legacy BIOS mode."
+        echo ""
+        echo "Reference: https://rpmfusion.org/Howto/Secure%20Boot"
+        echo "Documentation: /usr/share/doc/akmods/README.secureboot"
+        echo ""
+        echo "--------------------------------------------------------------------------------"
+        echo "1. Securing your key:"
+        echo "--------------------------------------------------------------------------------"
+        echo "Because the Secure Boot key is stored locally in /etc/pki/akmods, consider"
+        echo "encrypting your rootfs (LUKS) to protect the private signing key."
+        echo ""
+        echo "--------------------------------------------------------------------------------"
+        echo "2. Manual Key Generation & MOK Enrollment Steps:"
+        echo "--------------------------------------------------------------------------------"
+        echo "If you have Secure Boot enabled and wish to sign your drivers:"
+        echo ""
+        echo "a) Install required tools:"
+        echo "   sudo dnf install -y kmodtool akmods mokutil openssl"
+        echo ""
+        echo "b) Generate a default keypair:"
+        echo "   sudo kmodgenca -a"
+        echo ""
+        echo "c) Import the public key into MOK:"
+        echo "   sudo mokutil --import /etc/pki/akmods/certs/public_key.der"
+        echo "   -> Enter a temporary password when prompted (you will need this on reboot)."
+        echo ""
+        echo "d) Reboot your system:"
+        echo "   systemctl reboot"
+        echo ""
+        echo "e) On the blue 'MOK Management' screen after reboot:"
+        echo "   - Select 'Enroll MOK'"
+        echo "   - Select 'Continue' -> 'Yes'"
+        echo "   - Enter the password you set above (⚠️ WARNING: Keyboard is mapped to QWERTY!)"
+        echo "   - Select 'Reboot'"
+        echo ""
+        echo "--------------------------------------------------------------------------------"
+        echo "3. BIOS / EFI Firmware Updates:"
+        echo "--------------------------------------------------------------------------------"
+        echo "When updating the BIOS/UEFI firmware, the enrolled MOK key may be cleared."
+        echo "Re-enroll the key anytime with:"
+        echo "   sudo mokutil --import /etc/pki/akmods/certs/public_key.der"
+        echo "================================================================================"
+        echo ""
     else
         log "No NVIDIA GPU found. Skipping proprietary drivers."
     fi
@@ -706,7 +977,6 @@ setup_drivers() {
 setup_copr() {
     log "Installing COPR packages..."
     local coprs=(
-        "alternateved/eza:eza"
         "zeno/scrcpy:scrcpy"
         "lihaohong/yazi:yazi file ffmpeg 7zip jq poppler-utils fd-find ripgrep fzf zoxide resvg xclip wl-clipboard xsel ImageMagick"
     )
@@ -757,31 +1027,6 @@ setup_fonts() {
 }
 
 # ==============================================================================
-# Cloudflare Warp
-# ==============================================================================
-setup_warp() {
-    log "Installing Cloudflare Warp..."
-    run_sudo dnf install -y sassc glib2-devel libxml2 glibc-devel
-    run_sudo dnf config-manager addrepo --from-repofile=https://pkg.cloudflareclient.com/cloudflare-warp-ascii.repo --overwrite 2>/dev/null || true
-    run_sudo dnf install -y cloudflare-warp
-    
-    # Enable and start warp-svc before registration
-    run_sudo systemctl enable --now warp-svc 2>/dev/null || true
-    
-    # Only register if not already registered
-    if ! $DRY_RUN; then
-        if ! warp-cli account 2>/dev/null | grep -q "Account type"; then
-            check_network && warp-cli registration new 2>/dev/null || warn "Run 'warp-cli registration new' manually"
-        else
-            info "Warp already registered"
-        fi
-    else
-        dry "Register warp-cli account if needed"
-    fi
-    step_complete "Warp installed"
-}
-
-# ==============================================================================
 # GNOME Tools
 # ==============================================================================
 setup_gnome() {
@@ -808,42 +1053,53 @@ setup_gnome() {
 # ==============================================================================
 setup_packages() {
     log "Installing essential packages..."
-    run_sudo dnf install -y --skip-unavailable gcc clang fastfetch make cmake perl wmctrl cargo maven bat \
+    
+    local pkgs_to_install=(
+        gcc clang fastfetch make cmake perl wmctrl cargo maven bat eza \
         java-latest-openjdk java-latest-openjdk-devel nodejs python3 python3-pip wget htop unzip unrar \
-        p7zip p7zip-plugins ntfs-3g gparted timeshift vlc steam mangohud \
+        p7zip p7zip-plugins ntfs-3g gparted timeshift vlc \
         telegram-desktop vim neovim gh android-tools libva-utils gstreamer1-plugin-openh264
+    )
+    
+    # Add gaming packages only for gaming, workstation, creator, and full profiles
+    if [[ "$PROFILE" == "gaming" || "$PROFILE" == "workstation" || "$PROFILE" == "creator" || "$PROFILE" == "full" ]]; then
+        pkgs_to_install+=(steam mangohud)
+    fi
+    
+    run_sudo dnf install -y --skip-unavailable "${pkgs_to_install[@]}"
 
     run_sudo dnf config-manager setopt fedora-cisco-openh264.enabled=1
     
-    # Steam H264 unlock (fixes some games)
-    log "Unlocking Steam H264 codec..."
-    if ! $DRY_RUN; then
-        local unlock_pid
-        if flatpak list 2>/dev/null | grep -q "com.valvesoftware.Steam"; then
-            info "Flatpak Steam detected"
-            xdg-open steam://unlockh264/ 2>/dev/null &
-            unlock_pid=$!
-        else
-            steam steam://unlockh264/ 2>/dev/null &
-            unlock_pid=$!
-        fi
-        sleep 2
-        kill "$unlock_pid" 2>/dev/null || true
-    else
-        dry "Unlock Steam H264 codec"
-    fi
-    
-    info "Steam Settings (configure manually):"
-    info "  • Library → Enable 'Show Steam Deck compatibility info'"
-    info "  • Downloads → Disable 'Shader Pre-Caching'"
-    info "  • Interface → Client Beta Participation → Steam Beta Update"
-    
-    # MangoHud config
-    if command -v mangohud &>/dev/null; then
+    # Steam H264 unlock & MangoHud config (only if installed)
+    if [[ "$PROFILE" == "gaming" || "$PROFILE" == "workstation" || "$PROFILE" == "creator" || "$PROFILE" == "full" ]]; then
+        log "Unlocking Steam H264 codec..."
         if ! $DRY_RUN; then
-            mkdir -p ~/.config/MangoHud
-            backup_file "$HOME/.config/MangoHud/MangoHud.conf"
-            cat > ~/.config/MangoHud/MangoHud.conf <<'MANGOHUD'
+            local unlock_pid
+            if flatpak list 2>/dev/null | grep -q "com.valvesoftware.Steam"; then
+                info "Flatpak Steam detected"
+                xdg-open steam://unlockh264/ 2>/dev/null &
+                unlock_pid=$!
+            else
+                steam steam://unlockh264/ 2>/dev/null &
+                unlock_pid=$!
+            fi
+            sleep 2
+            kill "$unlock_pid" 2>/dev/null || true
+        else
+            dry "Unlock Steam H264 codec"
+        fi
+        
+        info "Steam Settings (configure manually):"
+        info "  • Library → Enable 'Show Steam Deck compatibility info'"
+        info "  • Downloads → Disable 'Shader Pre-Caching'"
+        info "  • Interface → Client Beta Participation → Steam Beta Update"
+        
+        # MangoHud config
+        if command -v mangohud &>/dev/null || $DRY_RUN; then
+            if ! $DRY_RUN; then
+                mkdir -p ~/.config/MangoHud
+                backup_file "$HOME/.config/MangoHud/MangoHud.conf"
+                cat > ~/.config/MangoHud/MangoHud.conf <<'MANGOHUD'
 legacy_layout=false
 position=top-left
 font_size=32
@@ -857,9 +1113,10 @@ cpu_temp
 ram
 vram
 MANGOHUD
-            info "MangoHud configured"
-        else
-            dry "Create MangoHud.conf"
+                info "MangoHud configured"
+            else
+                dry "Create MangoHud.conf"
+            fi
         fi
     fi
 
@@ -1230,7 +1487,6 @@ show_summary() {
     systemctl is-active --quiet tlp && echo "  ✅ TLP" || echo "  ❌ TLP"
     systemctl is-active --quiet docker && echo "  ✅ Docker" || echo "  ❌ Docker"
     command -v nvidia-smi &>/dev/null && echo "  ✅ NVIDIA drivers"
-    command -v warp-cli &>/dev/null && { warp-cli account 2>/dev/null | grep -q "Account" && echo "  ✅ Warp registered" || echo "  ⚠️  Warp: not registered"; }
     [[ "$SHELL" == "$(which zsh)" ]] && echo "  ✅ ZSH default" || echo "  ⚠️  ZSH: not default shell"
     
     # Hardware acceleration verification
@@ -1246,10 +1502,9 @@ show_summary() {
     fi
     
     echo "Next Steps:"
-    echo "1. Reboot if you haven't already (Docker group, libvirt group, MOK enrollment)"
-    echo "2. p10k configure (Powerlevel10k theme)"
-    echo "3. warp-cli connect"
-    echo "4. docker run hello-world"
+    echo "1. Reboot your system if you haven't already (Docker group, libvirt group, kernel modules)"
+    echo "2. Open a new terminal to start using ZSH + Starship"
+    echo "3. Verify Docker: docker run hello-world"
     echo -e "${GREEN}System ready! 🚀${NC}"
 }
 
@@ -1299,10 +1554,9 @@ main() {
         "setup_power:Power Management"
         "setup_nosleep:No-Sleep Settings"
         "setup_fonts:System Fonts"
-        "setup_shell:ZSH + Powerlevel10k"
+        "setup_shell:ZSH + Starship"
         "setup_browser_multimedia:Brave + Multimedia"
         "setup_copr:COPR Packages"
-        "setup_warp:Cloudflare Warp"
         "setup_gnome:GNOME Tools"
         "setup_packages:Essential Packages"
         "setup_dev:Development Tools"
@@ -1316,11 +1570,11 @@ main() {
     
     # Define profile step filters
     local -A PROFILE_STEPS
-    PROFILE_STEPS[minimal]="setup_dnf setup_fonts setup_shell"
-    PROFILE_STEPS[dev]="setup_dnf setup_fonts setup_shell setup_dev setup_docker setup_antigravity setup_kvm"
-    PROFILE_STEPS[gaming]="setup_dnf setup_fonts setup_shell setup_browser_multimedia setup_packages setup_flatpaks setup_pre_driver_reboot setup_drivers"
-    PROFILE_STEPS[workstation]="setup_dnf setup_dns setup_fonts setup_shell setup_dev setup_docker setup_antigravity setup_kvm"
-    PROFILE_STEPS[creator]="setup_dnf setup_fonts setup_shell setup_browser_multimedia setup_copr setup_packages setup_flatpaks setup_pre_driver_reboot setup_drivers"
+    PROFILE_STEPS[minimal]="setup_dnf setup_dns setup_fonts setup_shell setup_browser_multimedia setup_pre_driver_reboot setup_drivers"
+    PROFILE_STEPS[dev]="setup_dnf setup_dns setup_power setup_nosleep setup_fonts setup_shell setup_browser_multimedia setup_gnome setup_packages setup_dev setup_antigravity setup_docker setup_kvm setup_pre_driver_reboot setup_drivers"
+    PROFILE_STEPS[gaming]="setup_dnf setup_dns setup_power setup_fonts setup_shell setup_browser_multimedia setup_gnome setup_packages setup_flatpaks setup_pre_driver_reboot setup_drivers"
+    PROFILE_STEPS[workstation]="setup_dnf setup_dns setup_power setup_fonts setup_shell setup_browser_multimedia setup_gnome setup_packages setup_flatpaks setup_kvm setup_pre_driver_reboot setup_drivers"
+    PROFILE_STEPS[creator]="setup_dnf setup_dns setup_power setup_fonts setup_shell setup_browser_multimedia setup_copr setup_gnome setup_packages setup_flatpaks setup_kvm setup_pre_driver_reboot setup_drivers"
     PROFILE_STEPS[full]=""  # Empty means all steps
     
     info "Profile: $PROFILE"

@@ -4,7 +4,7 @@
 
 An interactive post-installation script for Fedora 44 Workstation (GNOME).
 
-Built from years of actual Fedora usage, covering the things I find myself setting up on every fresh install: driver detection, multimedia codecs, dev tools, gaming, shell customization, Docker, virtualization, and a handful of optional extras like Cloudflare Warp.
+Built from years of actual Fedora usage, covering the things I find myself setting up on every fresh install: driver detection, multimedia codecs, dev tools, gaming, shell customization, Docker, and virtualization.
 
 ---
 
@@ -20,13 +20,15 @@ Built from years of actual Fedora usage, covering the things I find myself setti
 
 ---
 
-## What's New in v5.1.0
+## What's New in v5.2.0
 
-- Restructured execution order: GPU driver setup now runs last, after all packages are installed
-- Added automatic reboot checkpoint before driver setup (detects kernel mismatch from `dnf update`)
-- After rebooting, re-running the script skips completed steps and resumes at driver setup
-- This prevents kernel module builds against a stale kernel and avoids mid-script disruption from NVIDIA/MOK enrollment
-- Updated profile step ordering for gaming and creator profiles
+- **Starship Prompt:** Replaced Oh My Zsh and Powerlevel10k with Starship and standalone ZSH plugins (`zsh-autosuggestions`, `zsh-syntax-highlighting`), deploying a custom `~/.config/starship.toml` and clean `.zshrc`.
+- **DNS Brief & Prompts:** Added interactive DNS selection (`setup_dns`) with an informational brief across all profiles (Cloudflare default, Google, or skip).
+- **Safe GDM No-Sleep:** Implemented login screen power management via `/etc/dconf/db/gdm.d/01-power` and `dconf update` to eliminate D-Bus session and SELinux permission errors.
+- **Gaming & MangoHud Profile Filtering:** Restricted Steam and MangoHud installation and configuration (H.264 unlock, `MangoHud.conf`) to gaming-oriented profiles (`gaming`, `workstation`, `creator`, `full`).
+- **Driver Setup Uniformity:** Standardized all profiles to run the pre-driver reboot checkpoint and GPU driver setup at the end of their execution sequence.
+- **COPR & Warp Cleanup:** Removed obsolete `eza` COPR repo (available natively in Fedora) and removed Cloudflare Warp.
+- **Secure Boot & MOK Disclaimer:** Added detailed documentation and MOK enrollment guidance for NVIDIA kernel module signing.
 
 See [CHANGELOG.md](CHANGELOG.md) for the full history.
 
@@ -54,14 +56,14 @@ See [CHANGELOG.md](CHANGELOG.md) for the full history.
 
 ### Profiles
 
-| Profile       | What it installs                                              |
-| ------------- | ------------------------------------------------------------- |
-| `minimal`     | DNF config, fonts, shell                                      |
-| `dev`         | Minimal + dev tools, Docker, Antigravity, KVM                 |
-| `gaming`      | Minimal + multimedia, packages, Flatpaks, GPU drivers (last)  |
-| `workstation` | Dev + DNS, KVM/QEMU                                          |
-| `creator`     | Gaming + multimedia, COPR tools, GPU drivers (last)           |
-| `full`        | All steps with driver setup and reboot check at the very end  |
+| Profile       | What it installs                                                                                             |
+| ------------- | ------------------------------------------------------------------------------------------------------------ |
+| `minimal`     | DNF config, DNS, fonts, shell (Starship), Brave & codecs, GPU drivers (last)                                 |
+| `dev`         | Minimal + power, no-sleep, GNOME tools, dev tools, Antigravity, Docker, KVM/QEMU, GPU drivers (last)        |
+| `gaming`      | Minimal + power, GNOME tools, gaming packages (Steam, MangoHud, Vesktop), Flatpaks, GPU drivers (last)       |
+| `workstation` | Minimal + power, GNOME tools, packages, Flatpaks, KVM/QEMU, GPU drivers (last)                               |
+| `creator`     | Gaming + COPR tools (Yazi, Scrcpy), KVM/QEMU, GPU drivers (last)                                            |
+| `full`        | All steps: DNF, DNS, power, no-sleep, fonts, shell, codecs, COPR, GNOME, packages, dev, Antigravity, Flatpaks, Docker, KVM, GPU drivers (last) |
 
 ---
 
@@ -77,7 +79,7 @@ See [CHANGELOG.md](CHANGELOG.md) for the full history.
 ## Warnings
 
 - Some steps require a reboot (GPU drivers, Docker group, Secure Boot, KVM)
-- NVIDIA users: read the Secure Boot prompts carefully
+- NVIDIA users: read the Secure Boot prompts carefully; follow the MOK enrollment steps when prompted and complete key enrollment on reboot
 - ZSH default shell change needs a logout/login
 - Docker and libvirt group changes need a reboot or re-login
 - The Antigravity repo is added with `gpgcheck=0` — this matches Google's own official Fedora/RHEL install instructions, which currently don't publish a signing key for the RPM repo (their APT/Debian instructions do). You're relying on HTTPS + Google's infrastructure for that package, not GPG signature verification. The script warns about this when the step runs; if that's not an acceptable trade-off for you, skip `setup_antigravity` and install manually once Google publishes a key.
@@ -88,11 +90,11 @@ See [CHANGELOG.md](CHANGELOG.md) for the full history.
 
 ### Core
 
-DNF optimization (parallel downloads, fastest mirror, version pinning), RPM Fusion, Flathub, optional DNS override (Google or Cloudflare), disable auto-sleep (GDM + user), system fonts and FiraCode Nerd Font.
+DNF optimization (parallel downloads, fastest mirror, version pinning), RPM Fusion, Flathub, optional DNS override (Cloudflare or Google), disable auto-sleep (GDM system dconf keyfile + user session), system fonts and FiraCode Nerd Font.
 
 ### Shell
 
-ZSH, Oh My Zsh, Powerlevel10k, zsh-autosuggestions, zsh-syntax-highlighting, eza/bat aliases.
+ZSH, Starship prompt, zsh-autosuggestions, zsh-syntax-highlighting, eza/bat aliases.
 
 ### Power
 
@@ -112,11 +114,7 @@ GCC, Clang, LLVM, Java, Node.js, Python, Docker + Docker Compose, Corepack, Anti
 
 ### Gaming
 
-Steam (with H.264 unlock), MangoHud (auto-configured if installed), ProtonPlus.
-
-### Cloud
-
-Cloudflare Warp.
+Steam (with H.264 unlock), MangoHud (auto-configured if installed), ProtonPlus. Included on `gaming`, `workstation`, `creator`, and `full` profiles.
 
 ### Virtualization
 

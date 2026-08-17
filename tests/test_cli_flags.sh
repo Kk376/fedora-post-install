@@ -71,45 +71,45 @@ run_test "Force flag reversed order (-n --force)" 0 "DRY-RUN MODE" -n --force
 run_test "Force flag reversed short (-n -f)" 0 "DRY-RUN MODE" -n -f
 
 # 4. Profile flags (--profile=VALUE and --profile VALUE)
-# Minimal profile (3 steps)
+# Minimal profile (7 steps)
 run_test "Profile minimal (= syntax)" 0 "Profile: minimal" --profile=minimal -n
-run_test "Profile minimal step count (= syntax)" 0 "of 3" --profile=minimal -n
+run_test "Profile minimal step count (= syntax)" 0 "of 7" --profile=minimal -n
 run_test "Profile minimal (space syntax)" 0 "Profile: minimal" --profile minimal -n
-run_test "Profile minimal step count (space syntax)" 0 "of 3" --profile minimal -n
+run_test "Profile minimal step count (space syntax)" 0 "of 7" --profile minimal -n
 
-# Dev profile (7 steps)
+# Dev profile (15 steps)
 run_test "Profile dev (= syntax)" 0 "Profile: dev" --profile=dev -n
-run_test "Profile dev step count (= syntax)" 0 "of 7" --profile=dev -n
+run_test "Profile dev step count (= syntax)" 0 "of 15" --profile=dev -n
 run_test "Profile dev (space syntax)" 0 "Profile: dev" --profile dev -n
-run_test "Profile dev step count (space syntax)" 0 "of 7" --profile dev -n
+run_test "Profile dev step count (space syntax)" 0 "of 15" --profile dev -n
 
-# Gaming profile (8 steps)
+# Gaming profile (11 steps)
 run_test "Profile gaming (= syntax)" 0 "Profile: gaming" --profile=gaming -n
-run_test "Profile gaming step count (= syntax)" 0 "of 8" --profile=gaming -n
+run_test "Profile gaming step count (= syntax)" 0 "of 11" --profile=gaming -n
 run_test "Profile gaming (space syntax)" 0 "Profile: gaming" --profile gaming -n
-run_test "Profile gaming step count (space syntax)" 0 "of 8" --profile gaming -n
+run_test "Profile gaming step count (space syntax)" 0 "of 11" --profile gaming -n
 
-# Workstation profile (8 steps)
+# Workstation profile (12 steps)
 run_test "Profile workstation (= syntax)" 0 "Profile: workstation" --profile=workstation -n
-run_test "Profile workstation step count (= syntax)" 0 "of 8" --profile=workstation -n
+run_test "Profile workstation step count (= syntax)" 0 "of 12" --profile=workstation -n
 run_test "Profile workstation (space syntax)" 0 "Profile: workstation" --profile workstation -n
-run_test "Profile workstation step count (space syntax)" 0 "of 8" --profile workstation -n
+run_test "Profile workstation step count (space syntax)" 0 "of 12" --profile workstation -n
 
-# Creator profile (9 steps)
+# Creator profile (13 steps)
 run_test "Profile creator (= syntax)" 0 "Profile: creator" --profile=creator -n
-run_test "Profile creator step count (= syntax)" 0 "of 9" --profile=creator -n
+run_test "Profile creator step count (= syntax)" 0 "of 13" --profile=creator -n
 run_test "Profile creator (space syntax)" 0 "Profile: creator" --profile creator -n
-run_test "Profile creator step count (space syntax)" 0 "of 9" --profile creator -n
+run_test "Profile creator step count (space syntax)" 0 "of 13" --profile creator -n
 
-# Full profile (18 steps)
+# Full profile (17 steps)
 run_test "Profile full (= syntax)" 0 "Profile: full" --profile=full -n
-run_test "Profile full step count (= syntax)" 0 "of 18" --profile=full -n
+run_test "Profile full step count (= syntax)" 0 "of 17" --profile=full -n
 run_test "Profile full (space syntax)" 0 "Profile: full" --profile full -n
-run_test "Profile full step count (space syntax)" 0 "of 18" --profile full -n
+run_test "Profile full step count (space syntax)" 0 "of 17" --profile full -n
 
 # Default profile (when no profile flag passed)
 run_test "Default profile is full" 0 "Profile: full" -n
-run_test "Default profile step count" 0 "of 18" -n
+run_test "Default profile step count" 0 "of 17" -n
 
 # 5. Invalid options & validation checks
 run_test "Invalid flag (--invalid)" 1 "Unknown option: --invalid" --invalid
@@ -119,7 +119,7 @@ run_test "Invalid profile (= syntax)" 1 "Unknown profile: invalid" --profile=inv
 run_test "Invalid profile (space syntax)" 1 "Unknown profile: invalid" --profile invalid
 run_test "Invalid profile name custom" 1 "Unknown profile: nonexistent" --profile=nonexistent
 run_test "Invalid option after valid option" 1 "Unknown option: --bogus" -n --bogus
-run_test "Profile missing argument" 1 "unbound variable" --profile
+run_test "Profile missing argument" 1 "Option --profile requires an argument" --profile
 
 # 6. Flag combinations and ordering
 run_test "Combo: -n -f --profile=minimal" 0 "Profile: minimal" -n -f --profile=minimal
