@@ -76,7 +76,6 @@ GREEN='\033[0;32m'
 BLUE='\033[0;34m'
 RED='\033[0;31m'
 YELLOW='\033[1;33m'
-
 NC='\033[0m'
 
 # Enable logging to file
@@ -129,7 +128,6 @@ run_sudo() {
 # Download a release asset from GitHub.
 # Usage: github_download <owner/repo> <asset_pattern> <output_path> [fallback_url]
 # asset_pattern is a grep -E regex to match the asset filename.
-# Returns 0 on success, 1 on failure.
 github_download() {
     local repo="$1" pattern="$2" output="$3" fallback="${4:-}"
     local api_url="https://api.github.com/repos/$repo/releases/latest"
@@ -154,22 +152,6 @@ github_download() {
     return 1
 }
 
-# Ensure a line is set in ~/.zshrc: replace any line matching an ERE pattern,
-# or append if no line matches. Verifies the end state via grep instead of
-# trusting sed's exit code, which returns 0 whether or not anything matched.
-set_zshrc_line() {
-    local pattern="$1" desired="$2"
-    grep -qxF "$desired" ~/.zshrc 2>/dev/null && return 0
-    if grep -qE "$pattern" ~/.zshrc 2>/dev/null; then
-        PAT="$pattern" REPL="$desired" awk '
-            BEGIN { pat = ENVIRON["PAT"]; repl = ENVIRON["REPL"] }
-            $0 ~ pat { print repl; next }
-            { print }
-        ' ~/.zshrc > ~/.zshrc.tmp && mv ~/.zshrc.tmp ~/.zshrc
-    fi
-    grep -qxF "$desired" ~/.zshrc 2>/dev/null || echo "$desired" >> ~/.zshrc
-}
-
 # Backup a file before modifying
 backup_file() {
     local file="$1"
@@ -187,57 +169,53 @@ backup_file() {
 
 # Restore backups
 restore_backups() {
-    local latest_backup=$(ls -td ~/.config/fedora-setup-backups/*/ 2>/dev/null | head -1)
+    local latest_backup
+    latest_backup=$(ls -td ~/.config/fedora-setup-backups/*/ 2>/dev/null | head -1 || true)
     if [[ -z "$latest_backup" ]]; then
         warn "No backups found"
         return 1
     fi
     latest_backup="${latest_backup%/}"
-    
+
     log "Latest backup: $latest_backup"
-    if confirm "Restore all files from this backup?" "N"; then
-        local prev_dotglob prev_nullglob
-        prev_dotglob=$(shopt -p dotglob || true)
-        prev_nullglob=$(shopt -p nullglob || true)
-        shopt -s dotglob nullglob
+    if ! confirm "Restore all files from this backup?" "N"; then
+        return 0
+    fi
 
-        for backup_file in "$latest_backup"/*; do
-            local filename=$(basename "$backup_file" .backup)
-            local original_paths=(
-                "$HOME/.zshrc"
-                "$HOME/.bashrc"
-                "/etc/dnf/dnf.conf"
-                "$HOME/.config/MangoHud/MangoHud.conf"
-            )
-            for orig in "${original_paths[@]}"; do
-                if [[ "$(basename "$orig")" == "$filename" ]]; then
-                    if $DRY_RUN; then
-                        dry "cp $backup_file $orig"
-                    else
-                        if [[ "$orig" =~ ^/etc/ ]]; then
-                            run_sudo cp "$backup_file" "$orig"
-                        else
-                            cp "$backup_file" "$orig"
-                        fi
-                        success "Restored: $orig"
-                    fi
-                    break
-                fi
-            done
-        done
+    local originals=(
+        "$HOME/.zshrc"
+        "$HOME/.bashrc"
+        "/etc/dnf/dnf.conf"
+        "$HOME/.config/MangoHud/MangoHud.conf"
+        "$HOME/.config/starship.toml"
+    )
 
-        eval "$prev_dotglob"
-        eval "$prev_nullglob"
+    for orig in "${originals[@]}"; do
+        local name backup_path
+        name="$(basename "$orig")"
+        backup_path="$latest_backup/$name.backup"
 
-        # Reset state file after restore to prevent stale state
-        if ! $DRY_RUN; then
-            rm -f "$STATE_FILE"
-            warn "State reset due to restore - all steps will re-run"
+        if [[ ! -f "$backup_path" ]]; then
+            warn "No backup for $orig"
+            continue
         fi
+
+        if $DRY_RUN; then
+            dry "cp $backup_path $orig"
+        elif [[ "$orig" == /etc/* ]]; then
+            run_sudo cp "$backup_path" "$orig"
+            success "Restored: $orig"
+        else
+            cp "$backup_path" "$orig"
+            success "Restored: $orig"
+        fi
+    done
+
+    if ! $DRY_RUN; then
+        rm -f "$STATE_FILE"
+        warn "State reset due to restore - all steps will re-run"
     fi
 }
-
-
 
 # ==============================================================================
 # State File Functions (Idempotency)
@@ -312,8 +290,6 @@ check_disk_space() {
     fi
 }
 
-
-
 # Show installed versions
 show_versions() {
     log "Checking installed versions..."
@@ -330,26 +306,24 @@ show_versions() {
 }
 
 # Sudo check and keep-alive
+SUDO_PID=""
 if ! $DRY_RUN; then
     sudo -v || { error "Requires sudo"; exit 1; }
     while true; do sudo -n true; sleep 60; kill -0 "$$" 2>/dev/null || exit; done &
+    SUDO_PID=$!
 fi
-
 
 # ==============================================================================
 # DNF Configuration
 # ==============================================================================
 setup_dnf() {
     log "Configuring DNF..."
-    
-    # Backup config before modifying
+
     backup_file "/etc/dnf/dnf.conf"
-    
-    # Use idempotent block markers - remove old block if exists, then add fresh
+
     if ! $DRY_RUN; then
         run_sudo sed -i '/^# BEGIN fedora-setup$/,/^# END fedora-setup$/d' /etc/dnf/dnf.conf
-        
-        # Parallel downloads optimization
+
         run_sudo tee -a /etc/dnf/dnf.conf > /dev/null <<EOF
 # BEGIN fedora-setup
 max_parallel_downloads=10
@@ -358,8 +332,7 @@ EOF
     else
         dry "Add max_parallel_downloads=10 block to dnf.conf (idempotent)"
     fi
-    
-    # Atomic operation: Install RPM Fusion repos together
+
     log "Enabling RPM Fusion & Flathub (atomic operation)..."
     local fedora_ver
     fedora_ver=$(rpm -E %fedora 2>/dev/null || echo "44")
@@ -368,12 +341,9 @@ EOF
         "https://mirrors.rpmfusion.org/free/fedora/rpmfusion-free-release-${fedora_ver}.noarch.rpm" \
         "https://mirrors.rpmfusion.org/nonfree/fedora/rpmfusion-nonfree-release-${fedora_ver}.noarch.rpm"
     run flatpak remote-add --if-not-exists flathub https://flathub.org/repo/flathub.flatpakrepo 2>/dev/null || warn "Flathub already configured or failed"
-    
-    # System update with version pinning
-    run_sudo dnf update -y --refresh --setopt=best=True
-    
 
-    
+    run_sudo dnf update -y --refresh --setopt=best=True
+
     step_complete "DNF configured"
 }
 
@@ -381,13 +351,12 @@ EOF
 # DNS Configuration
 # ==============================================================================
 setup_dns() {
-    # Dry-run safety: DNS changes are interactive and can't be simulated
     if $DRY_RUN; then
         dry "DNS configuration (interactive step skipped in dry-run)"
         step_complete "DNS (dry-run)"
         return 0
     fi
-    
+
     echo ""
     log "DNS Configuration"
     echo "Custom DNS replaces your ISP's default DNS with fast, private resolvers."
@@ -399,28 +368,27 @@ setup_dns() {
         step_complete "DNS (skipped)"
         return 0
     fi
-    
+
     echo "Choose a DNS provider:"
     echo "  1. Cloudflare DNS (1.1.1.1, 1.0.0.1)"
     echo "  2. Google DNS (8.8.8.8, 8.8.4.4)"
     echo "  3. Skip (keep current DNS)"
-    
+
     local dns_choice DNS_IPV4 DNS_IPV6 DNS_NAME
     read -p "Select [1/2/3] (default: 1): " -n 1 -r dns_choice
     echo ""
-    
+
     case "$dns_choice" in
         2) DNS_IPV4="8.8.8.8 8.8.4.4"; DNS_IPV6="2001:4860:4860::8888 2001:4860:4860::8844"; DNS_NAME="Google" ;;
         3) info "Keeping current DNS settings"; step_complete "DNS (skipped)"; return 0 ;;
         *) DNS_IPV4="1.1.1.1 1.0.0.1"; DNS_IPV6="2606:4700:4700::1111 2606:4700:4700::1001"; DNS_NAME="Cloudflare" ;;
     esac
-    
+
     log "Configuring $DNS_NAME DNS..."
     local conns
     conns=$(nmcli -t -f NAME connection show --active 2>/dev/null || true)
     while IFS= read -r conn; do
         [[ -z "$conn" ]] && continue
-        # Skip virtual/bridge interfaces (docker, loopback, libvirt, veth, bridge)
         if [[ "$conn" =~ ^(docker|lo|virbr|veth|br-) ]]; then
             info "Skipping virtual interface: $conn"
             continue
@@ -428,7 +396,9 @@ setup_dns() {
         log "Setting DNS for: $conn"
         nmcli connection modify "$conn" ipv4.ignore-auto-dns yes ipv4.dns "$DNS_IPV4" 2>/dev/null || warn "Failed to set IPv4 DNS for $conn"
         nmcli connection modify "$conn" ipv6.ignore-auto-dns yes ipv6.dns "$DNS_IPV6" 2>/dev/null || warn "Failed to set IPv6 DNS for $conn"
-        nmcli connection down "$conn" 2>/dev/null || true; sleep 1; nmcli connection up "$conn" 2>/dev/null || warn "Failed to restart $conn"
+        nmcli connection down "$conn" 2>/dev/null || true
+        sleep 1
+        nmcli connection up "$conn" 2>/dev/null || warn "Failed to restart $conn"
     done <<< "$conns"
     step_complete "$DNS_NAME DNS configured"
 }
@@ -442,18 +412,18 @@ setup_power() {
     echo "  • Disables GNOME's built-in power profiles UI"
     echo "  • Some AMD laptops work better with power-profiles-daemon"
     echo "  • Fedora upstream now prefers power-profiles-daemon"
-    
+
     if ! confirm "Use TLP instead of GNOME power profiles?" "N"; then
         info "Keeping GNOME power-profiles-daemon (no changes made)"
         step_complete "Power management (default)"
         return 0
     fi
-    
+
     log "Installing TLP..."
     run_sudo dnf install -y tlp tlp-rdw
     run_sudo systemctl enable tlp.service
     run_sudo systemctl mask power-profiles-daemon.service
-    
+
     run_sudo tee /etc/systemd/system/tlp-autostart.service > /dev/null <<'EOF'
 [Unit]
 Description=Force TLP apply after boot
@@ -476,8 +446,7 @@ EOF
 # ==============================================================================
 setup_nosleep() {
     log "Disabling auto-sleep..."
-    
-    # 1. GDM login screen (clean system keyfile, zero SELinux/permission issues)
+
     if ! $DRY_RUN; then
         run_sudo mkdir -p /etc/dconf/db/gdm.d
         run_sudo tee /etc/dconf/db/gdm.d/01-power > /dev/null <<'EOF'
@@ -492,7 +461,6 @@ EOF
         dry "Create /etc/dconf/db/gdm.d/01-power and run dconf update"
     fi
 
-    # 2. User session power settings
     local keys=(
         "sleep-inactive-ac-timeout 0"
         "sleep-inactive-ac-type nothing"
@@ -513,21 +481,20 @@ EOF
 setup_shell() {
     log "Installing ZSH & Starship..."
     run_sudo dnf install -y --skip-unavailable zsh curl git fontconfig
-    
+
     if ! command -v starship &>/dev/null && ! $DRY_RUN; then
         if ! run_sudo dnf install -y --skip-unavailable starship 2>/dev/null; then
             log "Installing Starship via official installer..."
             curl -sS https://starship.rs/install.sh | sh -s -- -y >/dev/null 2>&1 || true
         fi
     fi
-    
+
     if ! $DRY_RUN; then
         mkdir -p "$HOME/.zsh/plugins" "$HOME/.config"
-        
+
         [[ ! -d "$HOME/.zsh/plugins/zsh-autosuggestions" ]] && run git clone https://github.com/zsh-users/zsh-autosuggestions "$HOME/.zsh/plugins/zsh-autosuggestions" 2>/dev/null || true
         [[ ! -d "$HOME/.zsh/plugins/zsh-syntax-highlighting" ]] && run git clone https://github.com/zsh-users/zsh-syntax-highlighting "$HOME/.zsh/plugins/zsh-syntax-highlighting" 2>/dev/null || true
-        
-        # Deploy Starship configuration
+
         backup_file "$HOME/.config/starship.toml"
         cat > "$HOME/.config/starship.toml" <<'STARSHIP_CONFIG'
 "$schema" = 'https://starship.rs/config-schema.json'
@@ -662,7 +629,6 @@ vimcmd_replace_symbol = "[❮](bold purple)"
 vimcmd_visual_symbol = "[❮](bold yellow)"
 STARSHIP_CONFIG
 
-        # Backup existing .zshrc
         backup_file "$HOME/.zshrc"
 
         if [[ "$PROFILE" == "dev" || "$PROFILE" == "full" ]]; then
@@ -713,11 +679,9 @@ anti() {
     return 1
   fi
 
-  # Resolve target path (default: current dir)
   local LINUX_PATH
   LINUX_PATH="$(realpath "${1:-.}")"
 
-  # Launch Antigravity IDE connected to WSL
   "$IDE_EXE" --remote "wsl+$WSL_DISTRO_NAME" "$LINUX_PATH" &>/dev/null &
   disown
 }
@@ -727,8 +691,8 @@ export PATH="$HOME/.local/bin:$PATH"
 
 # ===== NVM =====
 export NVM_DIR="$HOME/.nvm"
-[ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"  # This loads nvm
-[ -s "$NVM_DIR/bash_completion" ] && \. "$NVM_DIR/bash_completion"  # This loads nvm bash_completion
+[ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"
+[ -s "$NVM_DIR/bash_completion" ] && \. "$NVM_DIR/bash_completion"
 
 # ===== Starship (ALWAYS LAST) =====
 eval "$(starship init zsh)"
@@ -770,9 +734,9 @@ ZSHRC_NORMAL
     else
         dry "Install Starship, clone plugins, deploy starship.toml and .zshrc"
     fi
-    
+
     confirm "Set ZSH as default shell?" "Y" && run chsh -s "$(command -v zsh)"
-    
+
     step_complete "Shell configured"
 }
 
@@ -781,16 +745,15 @@ ZSHRC_NORMAL
 # ==============================================================================
 setup_browser_multimedia() {
     log "Installing Brave & multimedia..."
-    
-    # Validate RPM Fusion is installed (required for multimedia)
+
     if ! rpm -q rpmfusion-free-release &>/dev/null; then
         warn "RPM Fusion may not be installed correctly - multimedia packages may fail"
     fi
-    
+
     run_sudo dnf install -y dnf-plugins-core
     run_sudo dnf config-manager addrepo --from-repofile=https://brave-browser-rpm-release.s3.brave.com/brave-browser.repo --overwrite 2>/dev/null || true
     run_sudo dnf install -y brave-browser mozilla-openh264
-    
+
     run_sudo dnf swap -y ffmpeg-free ffmpeg --allowerasing
     run_sudo dnf group upgrade -y multimedia --setopt=install_weak_deps=False --exclude=PackageKit-gstreamer-plugin
     run_sudo dnf group upgrade -y sound-and-video
@@ -809,7 +772,6 @@ setup_pre_driver_reboot() {
         return 0
     fi
 
-    # Check if the running kernel matches the installed kernel
     local running_kernel installed_kernel
     running_kernel=$(uname -r)
     installed_kernel=$(rpm -q --last kernel-core kernel 2>/dev/null | head -1 | awk '{print $1}' | sed -E 's/kernel-(core-)?//' || true)
@@ -846,7 +808,6 @@ setup_pre_driver_reboot() {
 # Smart Driver Detection
 # ==============================================================================
 setup_drivers() {
-    # Prompt for minimal profile
     if [[ "$PROFILE" == "minimal" ]]; then
         if ! confirm "Configure GPU drivers?" "N"; then
             info "Skipping GPU driver setup for minimal profile"
@@ -856,55 +817,49 @@ setup_drivers() {
     fi
 
     log "Detecting Hardware..."
-    
+
     local CHASSIS GPU_NVIDIA GPU_AMD GPU_INTEL
     CHASSIS=$(hostnamectl chassis 2>/dev/null || echo "unknown")
-    # More specific GPU detection to avoid false positives
     GPU_NVIDIA=$(lspci | grep -Ei 'VGA|3D|Display' | grep -i nvidia || true)
     GPU_AMD=$(lspci | grep -Ei 'VGA|3D|Display' | grep -i amd || true)
     GPU_INTEL=$(lspci | grep -Ei 'VGA|3D|Display' | grep -i intel || true)
-    
+
     log "Detected Chassis: $CHASSIS"
-    
-    # 4a. Intel Drivers
+
     if [[ -n "$GPU_INTEL" ]]; then
         log "Intel GPU Detected: Installing intel-media-driver..."
         run_sudo dnf install -y intel-media-driver
     fi
-    
-    # 4b. AMD Drivers
+
     if [[ -n "$GPU_AMD" ]]; then
         log "AMD GPU Detected: Swapping for freeworld drivers..."
         run_sudo dnf swap -y mesa-va-drivers mesa-va-drivers-freeworld
         run_sudo dnf swap -y mesa-vdpau-drivers mesa-vdpau-drivers-freeworld
     fi
-    
-    # 4c. NVIDIA Drivers
+
     if [[ -n "$GPU_NVIDIA" ]]; then
         log "NVIDIA GPU Detected."
-        
-        # Common Nvidia Packages
+
         run_sudo dnf install -y kmodtool akmods mokutil openssl nvtop akmod-nvidia xorg-x11-drv-nvidia-cuda libva-nvidia-driver
-        
-        # Force build and verify modules
+
         log "Building NVIDIA kernel modules (this may take a few minutes)..."
         run_sudo akmods --force
-        
+
         if modinfo nvidia &>/dev/null; then
             success "NVIDIA module built successfully"
         else
             warn "NVIDIA module not yet available - will build during boot"
         fi
-        
+
         if [[ "$CHASSIS" == "laptop" || "$CHASSIS" == "notebook" || "$CHASSIS" == "convertible" ]]; then
             log "Laptop detected. Checking for Optimus/Hybrid setup..."
             if [[ -n "$GPU_INTEL" || -n "$GPU_AMD" ]]; then
-                 log "Hybrid Graphics (Optimus) detected."
+                log "Hybrid Graphics (Optimus) detected."
             else
-                 log "Dedicated Nvidia only (MUX Switch or Desktop replacement)."
+                log "Dedicated Nvidia only (MUX Switch or Desktop replacement)."
             fi
         fi
-        
+
         echo ""
         echo "================================================================================"
         echo "                      SECURE BOOT & NVIDIA DRIVER SIGNING                      "
@@ -959,7 +914,7 @@ setup_drivers() {
     else
         log "No NVIDIA GPU found. Skipping proprietary drivers."
     fi
-    
+
     step_complete "Drivers configured!!"
 }
 
@@ -993,11 +948,11 @@ setup_fonts() {
         dejavu-sans-mono-fonts liberation-sans-fonts liberation-serif-fonts liberation-mono-fonts \
         google-noto-sans-fonts google-noto-serif-fonts google-noto-mono-fonts google-carlito-fonts google-caladea-fonts \
         curl cabextract xorg-x11-font-utils fontconfig
-    
+
     run curl -sLO https://downloads.sourceforge.net/project/mscorefonts2/rpms/msttcore-fonts-installer-2.6-1.noarch.rpm
     run_sudo rpm -ivh --nodigest --nofiledigest msttcore-fonts-installer-2.6-1.noarch.rpm 2>/dev/null || true
     run rm -f msttcore-fonts-installer-2.6-1.noarch.rpm
-    
+
     log "Downloading FiraCode Nerd Font..."
     if ! $DRY_RUN; then
         mkdir -p ~/.local/share/fonts
@@ -1014,7 +969,7 @@ setup_fonts() {
         dry "Download and install FiraCode Nerd Font"
         dry "fc-cache -fv"
     fi
-    
+
     step_complete "Fonts installed"
 }
 
@@ -1025,7 +980,7 @@ setup_gnome() {
     log "Installing GNOME tools..."
     run_sudo dnf install -y gnome-tweaks
     run flatpak install -y flathub com.mattjakeman.ExtensionManager 2>/dev/null || true
-    
+
     info "Recommended GNOME Extensions (install via Extension Manager):"
     info "  • Blur My Shell"
     info "  • Clipboard Indicator"
@@ -1036,7 +991,7 @@ setup_gnome() {
     info "  • Space Bar"
     info "  • User Themes"
     info "  Note: Some extensions (Compiz effects) may not work on GNOME 45+"
-    
+
     step_complete "GNOME tools installed"
 }
 
@@ -1045,24 +1000,22 @@ setup_gnome() {
 # ==============================================================================
 setup_packages() {
     log "Installing essential packages..."
-    
+
     local pkgs_to_install=(
         gcc clang fastfetch make cmake perl wmctrl cargo maven bat eza \
         java-latest-openjdk java-latest-openjdk-devel nodejs python3 python3-pip wget htop unzip unrar \
         p7zip p7zip-plugins ntfs-3g gparted timeshift vlc \
         telegram-desktop vim neovim gh android-tools libva-utils gstreamer1-plugin-openh264
     )
-    
-    # Add gaming packages only for gaming, workstation, creator, and full profiles
+
     if [[ "$PROFILE" == "gaming" || "$PROFILE" == "workstation" || "$PROFILE" == "creator" || "$PROFILE" == "full" ]]; then
         pkgs_to_install+=(steam mangohud)
     fi
-    
+
     run_sudo dnf install -y --skip-unavailable "${pkgs_to_install[@]}"
 
     run_sudo dnf config-manager setopt fedora-cisco-openh264.enabled=1
-    
-    # Steam H264 unlock & MangoHud config (only if installed)
+
     if [[ "$PROFILE" == "gaming" || "$PROFILE" == "workstation" || "$PROFILE" == "creator" || "$PROFILE" == "full" ]]; then
         log "Unlocking Steam H264 codec..."
         if ! $DRY_RUN; then
@@ -1080,13 +1033,12 @@ setup_packages() {
         else
             dry "Unlock Steam H264 codec"
         fi
-        
+
         info "Steam Settings (configure manually):"
         info "  • Library → Enable 'Show Steam Deck compatibility info'"
         info "  • Downloads → Disable 'Shader Pre-Caching'"
         info "  • Interface → Client Beta Participation → Steam Beta Update"
-        
-        # MangoHud config
+
         if command -v mangohud &>/dev/null || $DRY_RUN; then
             if ! $DRY_RUN; then
                 mkdir -p ~/.config/MangoHud
@@ -1112,7 +1064,6 @@ MANGOHUD
         fi
     fi
 
-    # Vesktop (Linux-first Discord client without telemetry)
     log "Installing Vesktop..."
     if ! $DRY_RUN; then
         if command -v vesktop &>/dev/null || rpm -q vesktop &>/dev/null; then
@@ -1142,7 +1093,7 @@ MANGOHUD
     else
         dry "Download and install Vesktop RPM from GitHub Releases"
     fi
-    
+
     step_complete "Packages installed"
 }
 
@@ -1157,8 +1108,7 @@ setup_dev() {
         glibc-devel.i686 libstdc++-devel.i686 zlib-ng-compat-devel.i686 libX11-devel.i686 readline-devel.i686 ncurses-devel.i686 \
         meson ninja-build automake autoconf libtool pkg-config cmake-gui cmake-fedora gdb valgrind strace ltrace clang-tools-extra bear \
         python3-devel python3-virtualenv python3-wheel python3-setuptools
-    
-    # Configure ccache
+
     if command -v ccache &>/dev/null; then
         if ! $DRY_RUN; then
             ccache --set-config=max_size=50G && ccache --set-config=compression=true
@@ -1170,18 +1120,15 @@ setup_dev() {
             dry "Configure ccache: 50G max, compression enabled"
         fi
     fi
-    
+
     confirm "Install Rust toolchain?" "N" && run_sudo dnf install -y rust cargo rustup rustfmt clippy rust-analyzer
-    
-    # Corepack (yarn/pnpm management)
+
     if command -v npm >/dev/null; then
         run_sudo npm install -g corepack 2>/dev/null || true
         run_sudo corepack enable 2>/dev/null || true
         info "Corepack enabled"
     fi
-    
-    # Antigravity CLI (replaces discontinued Gemini CLI)
-    # Not an npm package - Google ships it as a standalone binary via their own installer
+
     if ! $DRY_RUN; then
         if command -v agy &>/dev/null; then
             info "Antigravity CLI (agy) already installed"
@@ -1193,7 +1140,7 @@ setup_dev() {
     else
         dry "Install Antigravity CLI (agy) via official installer"
     fi
-    
+
     step_complete "Dev tools installed"
 }
 
@@ -1220,13 +1167,11 @@ EOL
     else
         dry "Add Antigravity repo and install antigravity"
     fi
-    
-    # Install all extensions
+
     if ! $DRY_RUN && command -v antigravity >/dev/null; then
         log "Installing Antigravity extensions..."
         antigravity --install-extension bradlc.vscode-tailwindcss --install-extension catppuccin.catppuccin-vsc --install-extension christian-kohler.npm-intellisense --install-extension dbaeumer.vscode-eslint --install-extension devsense.composer-php-vscode --install-extension devsense.intelli-php-vscode --install-extension devsense.phptools-vscode --install-extension devsense.profiler-php-vscode --install-extension dsznajder.es7-react-js-snippets --install-extension eamodio.gitlens --install-extension esbenp.prettier-vscode --install-extension formulahendry.code-runner --install-extension golang.go --install-extension hbenl.vscode-mocha-test-adapter --install-extension hbenl.vscode-test-explorer --install-extension llvm-vs-code-extensions.vscode-clangd --install-extension meta.pyrefly --install-extension ms-azuretools.vscode-containers --install-extension ms-azuretools.vscode-docker --install-extension ms-pyright.pyright --install-extension ms-python.debugpy --install-extension ms-python.python --install-extension ms-python.vscode-python-envs --install-extension ms-vscode.cmake-tools --install-extension ms-vscode.cpptools-themes --install-extension ms-vscode.live-server --install-extension ms-vscode.test-adapter-converter --install-extension ms-vscode.vscode-typescript-next --install-extension redhat.java --install-extension shopify.ruby-lsp --install-extension vscjava.vscode-gradle --install-extension vscjava.vscode-java-debug --install-extension vscjava.vscode-java-dependency --install-extension vscjava.vscode-java-pack --install-extension vscjava.vscode-java-test --install-extension vscjava.vscode-maven --install-extension vscode-icons-team.vscode-icons 2>/dev/null || warn "Some extensions failed"
-        
-        # Create Antigravity settings file
+
         log "Creating Antigravity settings..."
         mkdir -p "$HOME/.config/Antigravity/User"
         cat > "$HOME/.config/Antigravity/User/settings.json" <<'SETTINGS'
@@ -1255,12 +1200,12 @@ SETTINGS
 setup_flatpaks() {
     log "Installing Flatpaks..."
     run flatpak install -y flathub org.localsend.localsend_app io.missioncenter.MissionCenter com.vysp3r.ProtonPlus 2>/dev/null || true
-    
+
     info "ProtonPlus installed - Use for Proton GE:"
     info "  • Only use if a game has issues with default Proton"
     info "  • Install latest Proton GE version from ProtonPlus"
     info "  • Set per-game in Steam: Properties → Compatibility"
-    
+
     step_complete "Flatpaks installed"
 }
 
@@ -1269,19 +1214,16 @@ setup_flatpaks() {
 # ==============================================================================
 setup_docker() {
     log "Configuring Docker..."
-    
-    # Install Docker packages (Fedora's moby-engine stack - NOT Docker CE)
+
     log "Installing Docker packages..."
     run_sudo dnf install -y docker docker-cli moby-engine containerd freerdp
-    
-    # Check if docker is installed first
+
     if ! rpm -q moby-engine &>/dev/null && ! rpm -q docker-ce &>/dev/null; then
         warn "Docker (moby-engine/docker-ce) not installed - skipping configuration"
         step_complete "Docker (not installed)"
         return 0
     fi
-    
-    # Tell NetworkManager to ignore docker0 (prevents it from being assigned to FedoraWorkstation zone)
+
     log "Configuring NetworkManager to ignore docker0..."
     if [[ ! -f /etc/NetworkManager/conf.d/10-docker.conf ]]; then
         run_sudo tee /etc/NetworkManager/conf.d/10-docker.conf >/dev/null <<'EOF'
@@ -1293,12 +1235,10 @@ EOF
     else
         info "NetworkManager already configured for Docker"
     fi
-    
-    # Fix firewall issue with Docker (tell firewalld to ignore docker0)
+
     log "Configuring firewall for Docker..."
     if [[ -f /etc/firewalld/firewalld.conf ]]; then
         if ! grep -q "IgnoreInterfaces=docker0" /etc/firewalld/firewalld.conf; then
-            # Check if IgnoreInterfaces line exists and update it, otherwise add it
             if grep -q "^IgnoreInterfaces=" /etc/firewalld/firewalld.conf; then
                 run_sudo sed -i 's/^IgnoreInterfaces=.*/IgnoreInterfaces=docker0/' /etc/firewalld/firewalld.conf
             else
@@ -1310,19 +1250,17 @@ EOF
             info "Firewall already configured for Docker"
         fi
     fi
-    
-    run_sudo usermod -aG docker $USER
 
-    # Enable and start docker + containerd
+    run_sudo usermod -aG docker "${USER:-$(id -un)}"
+
     run_sudo systemctl enable containerd.service 2>/dev/null || true
     if sudo systemctl is-failed docker &>/dev/null; then
         run_sudo systemctl reset-failed docker 2>/dev/null || true
     fi
     run_sudo systemctl enable --now docker 2>/dev/null || true
-    
+
     if sudo systemctl is-active --quiet docker; then
         success "Docker running"
-        # Note: docker test requires logout/login for group membership
         info "After reboot, verify with: docker run --rm hello-world"
     else
         warn "Docker failed to start - check: sudo systemctl status docker"
@@ -1330,8 +1268,7 @@ EOF
         info "  • Reboot and try again"
         info "  • Check: sudo journalctl -u docker --no-pager -n 20"
     fi
-    
-    # Docker Compose CLI plugin
+
     log "Installing Docker Compose CLI plugin..."
     if ! $DRY_RUN; then
         DOCKER_CONFIG=${DOCKER_CONFIG:-$HOME/.docker}
@@ -1350,7 +1287,7 @@ EOF
     else
         dry "Download and install Docker Compose CLI plugin"
     fi
-    
+
     step_complete "Docker configured"
 }
 
@@ -1359,8 +1296,7 @@ EOF
 # ==============================================================================
 setup_kvm() {
     log "Setting up KVM/QEMU Virtualization..."
-    
-    # Check if virtualization is supported
+
     if ! grep -E 'vmx|svm' /proc/cpuinfo &>/dev/null; then
         warn "CPU virtualization (VT-x/AMD-V) not detected or not enabled in BIOS"
         if ! confirm "Continue anyway?" "N"; then
@@ -1368,51 +1304,44 @@ setup_kvm() {
             return 0
         fi
     fi
-    
-    # Step 1: Install virtualization packages
+
     if confirm "Install KVM/QEMU virtualization packages?" "Y"; then
         log "Installing virtualization packages..."
         run_sudo dnf install -y @virtualization qemu-kvm libvirt virt-install virt-manager libvirt-devel virt-top guestfs-tools
     fi
-    
-    # Step 2: Configure services
+
     if confirm "Configure virtualization services (modern socket activation)?" "Y"; then
         log "Configuring virtualization services..."
         run_sudo systemctl disable --now libvirtd.service 2>/dev/null || true
         run_sudo systemctl enable --now virtqemud.socket
         success "Virtualization services configured"
     fi
-    
-    # Step 3: Configure firewall
+
     if confirm "Configure firewall for libvirt?" "Y"; then
         log "Configuring firewall..."
         run_sudo firewall-cmd --add-service=libvirt --permanent
         run_sudo firewall-cmd --reload
         success "Firewall configured for libvirt"
     fi
-    
-    # Step 4: Install VirtIO drivers for Windows VM support
+
     if confirm "Install VirtIO drivers (required for Windows VMs)?" "Y"; then
         log "Installing VirtIO drivers..."
         run_sudo wget https://fedorapeople.org/groups/virt/virtio-win/virtio-win.repo \
             -O /etc/yum.repos.d/virtio-win.repo 2>/dev/null || warn "Failed to add virtio-win repo"
         run_sudo dnf install -y virtio-win || warn "VirtIO drivers installation failed"
     fi
-    
-    # Step 5: Performance optimizations
+
     if confirm "Enable performance optimizations (tuned virtual-host profile)?" "Y"; then
         log "Enabling performance optimizations..."
         run_sudo systemctl enable --now tuned
         run_sudo tuned-adm profile virtual-host
         success "Performance tuning applied"
     fi
-    
-    # Step 6: Fix user permissions
+
     if confirm "Add current user to libvirt group?" "Y"; then
         log "Configuring user permissions..."
-        run_sudo usermod -aG libvirt $USER
-        
-        # Add LIBVIRT_DEFAULT_URI to shell configs
+        run_sudo usermod -aG libvirt "${USER:-$(id -un)}"
+
         if [[ -f ~/.bashrc ]] && ! grep -q "LIBVIRT_DEFAULT_URI" ~/.bashrc; then
             backup_file "$HOME/.bashrc"
             echo 'export LIBVIRT_DEFAULT_URI="qemu:///system"' >> ~/.bashrc
@@ -1423,13 +1352,12 @@ setup_kvm() {
         fi
         success "User added to libvirt group"
     fi
-    
+
     warn "⚠️  REBOOT REQUIRED for group membership changes"
     info "After reboot, run the following verification commands:"
     info "  1. sudo virt-host-validate qemu"
     info "  2. virsh uri"
-    
-    # Post-reboot configuration reminder
+
     if confirm "Show post-reboot storage and network setup commands?" "Y"; then
         echo ""
         log "Post-reboot commands to run manually:"
@@ -1460,7 +1388,7 @@ setup_kvm() {
         echo "  virsh pool-info default"
         echo ""
     fi
-    
+
     step_complete "KVM/QEMU Virtualization configured"
 }
 
@@ -1471,17 +1399,16 @@ show_summary() {
     local end_time=$(date +%s)
     local duration=$((end_time - START_TIME))
     local mins=$((duration / 60)) secs=$((duration % 60))
-    
+
     echo -e "\n${GREEN}=== INSTALLATION SUMMARY ===${NC}"
     echo "Time: ${mins}m ${secs}s | Steps: ${COMPLETED_STEPS} completed, ${FAILED_STEPS} failed, ${SKIPPED_STEPS} skipped (of ${TOTAL_STEPS})"
-    
+
     echo "Service Status:"
     systemctl is-active --quiet tlp && echo "  ✅ TLP" || echo "  ❌ TLP"
     systemctl is-active --quiet docker && echo "  ✅ Docker" || echo "  ❌ Docker"
     command -v nvidia-smi &>/dev/null && echo "  ✅ NVIDIA drivers"
-    [[ "$SHELL" == "$(which zsh)" ]] && echo "  ✅ ZSH default" || echo "  ⚠️  ZSH: not default shell"
-    
-    # Hardware acceleration verification
+    [[ "${SHELL:-}" == "$(command -v zsh 2>/dev/null)" ]] && echo "  ✅ ZSH default" || echo "  ⚠️  ZSH: not default shell"
+
     if confirm "Verify hardware video acceleration?" "N"; then
         log "Checking hardware acceleration..."
         echo ""
@@ -1492,54 +1419,49 @@ show_summary() {
         command -v vainfo >/dev/null && vainfo 2>/dev/null | grep -i "VAProfileH264" | head -3 || echo "  vainfo not found"
         echo ""
     fi
-    
+
     echo "Next Steps:"
     echo "1. Reboot your system if you haven't already (Docker group, libvirt group, kernel modules)"
     echo "2. Open a new terminal to start using ZSH + Starship"
-    echo "3. Verify Docker: docker run hello-world"
+    echo "3. Review the log file: $LOG_FILE"
     echo -e "${GREEN}System ready! 🚀${NC}"
 }
-
-
 
 # ==============================================================================
 # Main
 # ==============================================================================
 main() {
-    # Show mode indicator
     if $DRY_RUN; then
         echo -e "\033[0;35m========================================${NC}"
         echo -e "\033[0;35m   DRY-RUN MODE - No changes will be made${NC}"
         echo -e "\033[0;35m========================================${NC}"
         echo ""
     fi
-    
+
     echo -e "${GREEN}========================================${NC}"
     echo -e "${GREEN}   Fedora 44 Post-Install Setup v${SCRIPT_VERSION}${NC}"
     echo -e "${GREEN}========================================${NC}"
     info "Started at $(date)"
     info "Log file: $LOG_FILE"
-    
-    # Pre-flight menu
+
     if confirm "Show currently installed versions?" "N"; then
         show_versions
     fi
-    
+
     if confirm "Restore from previous backup?" "N"; then
-        restore_backups
+        restore_backups || true
         return 0
     fi
-    
+
     if ! $DRY_RUN && ! check_network; then
         error "No internet connection. Exiting."
         exit 1
     fi
-    
-    # Check disk space before starting
+
     if ! $DRY_RUN; then
         check_disk_space 20 "$HOME"
     fi
-    
+
     local steps=(
         "setup_dnf:DNF Configuration"
         "setup_dns:DNS Configuration"
@@ -1559,23 +1481,20 @@ main() {
         "setup_pre_driver_reboot:Pre-Driver Reboot"
         "setup_drivers:GPU Drivers"
     )
-    
-    # Define profile step filters
+
     local -A PROFILE_STEPS
     PROFILE_STEPS[minimal]="setup_dnf setup_dns setup_fonts setup_shell setup_browser_multimedia setup_pre_driver_reboot setup_drivers"
     PROFILE_STEPS[dev]="setup_dnf setup_dns setup_power setup_nosleep setup_fonts setup_shell setup_browser_multimedia setup_gnome setup_packages setup_dev setup_antigravity setup_docker setup_kvm setup_pre_driver_reboot setup_drivers"
     PROFILE_STEPS[gaming]="setup_dnf setup_dns setup_power setup_fonts setup_shell setup_browser_multimedia setup_gnome setup_packages setup_flatpaks setup_pre_driver_reboot setup_drivers"
     PROFILE_STEPS[workstation]="setup_dnf setup_dns setup_power setup_fonts setup_shell setup_browser_multimedia setup_gnome setup_packages setup_flatpaks setup_kvm setup_pre_driver_reboot setup_drivers"
     PROFILE_STEPS[creator]="setup_dnf setup_dns setup_power setup_fonts setup_shell setup_browser_multimedia setup_copr setup_gnome setup_packages setup_flatpaks setup_kvm setup_pre_driver_reboot setup_drivers"
-    PROFILE_STEPS[full]=""  # Empty means all steps
-    
+    PROFILE_STEPS[full]=""
+
     info "Profile: $PROFILE"
     [[ -n "${PROFILE_STEPS[$PROFILE]}" ]] && info "Running steps: ${PROFILE_STEPS[$PROFILE]}"
-    
-    # Initialize state file
+
     init_state
-    
-    # Filter steps and calculate TOTAL_STEPS dynamically based on profile
+
     local filtered_steps=()
     for step in "${steps[@]}"; do
         IFS=':' read -r func _ <<< "$step"
@@ -1584,25 +1503,20 @@ main() {
         fi
     done
     TOTAL_STEPS=${#filtered_steps[@]}
-    
+
     for step in "${filtered_steps[@]}"; do
         IFS=':' read -r func name <<< "$step"
 
-        
-        # Check if step was already completed (idempotency)
         if is_step_completed "$func" && ! $FORCE_RERUN; then
             info "Already completed: $name (use --force to re-run)"
             COMPLETED_STEPS=$((COMPLETED_STEPS + 1))
             continue
         fi
-        
+
         echo ""
         echo -e "${BLUE}Step: $name${NC}"
         if confirm "Run this step?" "Y"; then
             if $func; then
-                success "$name completed"
-                # Only update state in non-dry-run mode
-                # Counter is incremented in step_complete
                 if ! $DRY_RUN; then
                     mark_step_completed "$func"
                 fi
@@ -1615,16 +1529,18 @@ main() {
             SKIPPED_STEPS=$((SKIPPED_STEPS + 1))
         fi
     done
-    
 
     show_summary
-    
-    # Final info
+
     info "Full log saved to: $LOG_FILE"
     if [[ -d "$BACKUP_DIR" ]]; then
         info "Config backups saved to: $BACKUP_DIR"
     fi
 }
 
-trap 'echo -e "\n${RED}Interrupted${NC}"; exit 1' INT
+cleanup() {
+    [[ -n "$SUDO_PID" ]] && kill "$SUDO_PID" 2>/dev/null || true
+}
+trap 'echo -e "\n${RED}Interrupted${NC}"; cleanup; exit 1' INT TERM
+trap cleanup EXIT
 main "$@"
