@@ -1,3 +1,12 @@
+# Logs & temporary files
 *.log
+*.tmp
+*.bak
+
+# Packages & build artifacts
 *.rpm
 squashfs-root/
+
+# Test artifacts & local configurations
+.test_env/
+.config/
