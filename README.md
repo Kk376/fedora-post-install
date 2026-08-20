@@ -10,13 +10,13 @@ Built from years of actual Fedora usage, covering the things I find myself setti
 
 ## Features
 
-- **Interactive** — every step asks before running; nothing happens behind your back
-- **Hardware-aware** — detects Intel / AMD / NVIDIA GPUs, hybrid Optimus setups, and CPU virtualization support
-- **Secure Boot–aware NVIDIA setup** — builds kernel modules, generates keys, and walks you through MOK enrollment
-- **Idempotent** — state file tracks what's done; you can interrupt and pick up where you left off, or `--force` to re-run
-- **Profile-based** — six profiles so you only install what you actually need
-- **Dry-run mode** — preview everything without touching the system
-- **Backup and restore** — backs up config files before modifying them
+- **Interactive**: every step asks before running; nothing happens behind your back
+- **Hardware-aware**: detects Intel / AMD / NVIDIA GPUs, hybrid Optimus setups, and CPU virtualization support
+- **Secure Boot-aware NVIDIA setup**: builds kernel modules, generates keys, and walks you through MOK enrollment
+- **Idempotent**: state file tracks what's done; you can interrupt and pick up where you left off, or `--force` to re-run
+- **Profile-based**: six profiles so you only install what you actually need
+- **Dry-run mode**: preview everything without touching the system
+- **Backup and restore**: backs up config files before modifying them
 
 ---
 
@@ -174,10 +174,10 @@ chmod +x setup.sh
 
 Each step prompts before running.
 
----
+## Contributing
 
-Built and maintained by Kushagra Kumar.
+See [CONTRIBUTING.md](CONTRIBUTING.md) for contribution guidelines and testing instructions.
 
 ## License
 
-MIT — see [LICENSE](LICENSE).
+MIT. See [LICENSE](LICENSE).
