@@ -14,6 +14,7 @@ LOG_FILE="/tmp/fedora-setup-$(date +%Y%m%d_%H%M%S).log"
 SCRIPT_VERSION="5.2.0"
 PROFILE="full"
 FORCE_RERUN=false
+# State checkpoint tracking enables idempotent step skipping and seamless resumption across driver reboots.
 STATE_FILE="$HOME/.config/fedora-setup/state.txt"
 
 # Parse command line arguments
@@ -133,7 +134,7 @@ is_dev_profile() {
     [[ "$PROFILE" == "dev" || "$PROFILE" == "full" ]]
 }
 
-# Download a release asset from GitHub.
+# Download a release asset from GitHub with progressive JSON parser fallback (jq -> python3 -> regex).
 # Usage: github_download <owner/repo> <asset_pattern> <output_path> [fallback_url]
 # asset_pattern is a grep -E regex to match the asset filename.
 github_download() {
@@ -144,8 +145,10 @@ github_download() {
 
     api_response=$(curl -sfL --max-time 10 "$api_url" 2>/dev/null || true)
     if [[ -n "$api_response" ]]; then
+        # Primary parser: jq utility
         if command -v jq &>/dev/null; then
             download_url=$(echo "$api_response" | jq -r ".assets[] | select(.name | test(\"$pattern\")) | .browser_download_url" 2>/dev/null | head -1 || true)
+        # Secondary fallback: Python 3 json/re standard modules
         elif command -v python3 &>/dev/null; then
             download_url=$(python3 -c "
 import sys, json, re
@@ -159,6 +162,7 @@ try:
 except Exception:
     pass
 " "$pattern" <<< "$api_response" 2>/dev/null || true)
+        # Tertiary fallback: Perl-compatible regex via grep
         else
             download_url=$(echo "$api_response" | grep -oP '"browser_download_url":\s*"\K[^"]*' 2>/dev/null | grep -E "$pattern" 2>/dev/null | head -1 || true)
         fi
@@ -188,7 +192,8 @@ backup_file() {
     fi
 }
 
-# Restore backups
+# Restore system and user configuration files from the most recent backup timestamp.
+# Purges STATE_FILE upon restoration to force full step re-evaluation on subsequent runs.
 restore_backups() {
     local latest_backup
     latest_backup=$(ls -td ~/.config/fedora-setup-backups/*/ 2>/dev/null | head -1 || true)
@@ -326,7 +331,8 @@ show_versions() {
     done
 }
 
-# Sudo check and keep-alive
+# Refresh sudo timestamp in background subshell loop to prevent auth expiry during long DNF or compilation tasks.
+# Loop terminates automatically when parent script process ($$) exits.
 SUDO_PID=""
 if ! $DRY_RUN; then
     sudo -v || { error "Requires sudo"; exit 1; }
@@ -337,14 +343,17 @@ fi
 # ==============================================================================
 # DNF Configuration
 # ==============================================================================
+# Configure DNF package manager parallel fetching, core third-party repositories, and Flathub.
 setup_dnf() {
     log "Configuring DNF..."
 
     backup_file "/etc/dnf/dnf.conf"
 
     if ! $DRY_RUN; then
+        # Prune existing managed block to maintain idempotency across repeated executions
         run_sudo sed -i '/^# BEGIN fedora-setup$/,/^# END fedora-setup$/d' /etc/dnf/dnf.conf
 
+        # max_parallel_downloads=10 saturates broadband pipes during massive multi-package transactions
         run_sudo tee -a /etc/dnf/dnf.conf > /dev/null <<EOF
 # BEGIN fedora-setup
 max_parallel_downloads=10
@@ -355,9 +364,11 @@ EOF
     fi
 
     log "Enabling RPM Fusion & Flathub (atomic operation)..."
+    # Query RPM %fedora macro to dynamically match host OS release version (fallback to 44)
     local fedora_ver
     fedora_ver=$(rpm -E %fedora 2>/dev/null || echo "44")
     [[ -z "$fedora_ver" || "$fedora_ver" == "%fedora" ]] && fedora_ver="44"
+    # --setopt=best=True forces strict highest-version dependency resolution rather than falling back
     run_sudo dnf install -y --setopt=best=True \
         "https://mirrors.rpmfusion.org/free/fedora/rpmfusion-free-release-${fedora_ver}.noarch.rpm" \
         "https://mirrors.rpmfusion.org/nonfree/fedora/rpmfusion-nonfree-release-${fedora_ver}.noarch.rpm"
@@ -410,6 +421,7 @@ setup_dns() {
     conns=$(nmcli -t -f NAME connection show --active 2>/dev/null || true)
     while IFS= read -r conn; do
         [[ -z "$conn" ]] && continue
+        # Exclude container bridges, host loopback, and virtual interfaces to avoid breaking container subnet name resolution
         if [[ "$conn" =~ ^(docker|lo|virbr|veth|br-) ]]; then
             info "Skipping virtual interface: $conn"
             continue
@@ -417,6 +429,7 @@ setup_dns() {
         log "Setting DNS for: $conn"
         nmcli connection modify "$conn" ipv4.ignore-auto-dns yes ipv4.dns "$DNS_IPV4" 2>/dev/null || warn "Failed to set IPv4 DNS for $conn"
         nmcli connection modify "$conn" ipv6.ignore-auto-dns yes ipv6.dns "$DNS_IPV6" 2>/dev/null || warn "Failed to set IPv6 DNS for $conn"
+        # Cycle interface connection so systemd-resolved and NetworkManager immediately reload upstream resolvers
         nmcli connection down "$conn" 2>/dev/null || true
         sleep 1
         nmcli connection up "$conn" 2>/dev/null || warn "Failed to restart $conn"
@@ -440,11 +453,13 @@ setup_power() {
         return 0
     fi
 
+    # Mask power-profiles-daemon to prevent D-Bus state conflicts with TLP power governor rules
     log "Installing TLP..."
     run_sudo dnf install -y tlp tlp-rdw
     run_sudo systemctl enable tlp.service
     run_sudo systemctl mask power-profiles-daemon.service
 
+    # Apply TLP configuration via oneshot service unit once multi-user.target completes during boot
     run_sudo tee /etc/systemd/system/tlp-autostart.service > /dev/null <<'EOF'
 [Unit]
 Description=Force TLP apply after boot
@@ -468,6 +483,8 @@ EOF
 setup_nosleep() {
     log "Disabling auto-sleep..."
 
+    # Configure GDM greeter dconf database: GDM runs under its own system user and dconf profile,
+    # requiring isolated configuration in /etc/dconf/db/gdm.d to prevent pre-login display sleep.
     if ! $DRY_RUN; then
         run_sudo mkdir -p /etc/dconf/profile /etc/dconf/db/gdm.d
         if [[ ! -f /etc/dconf/profile/gdm ]]; then
@@ -489,6 +506,7 @@ EOF
         dry "Create /etc/dconf/db/gdm.d/01-power and run dconf update"
     fi
 
+    # Update active user session settings via gsettings
     local keys=(
         "sleep-inactive-ac-timeout 0"
         "sleep-inactive-ac-type nothing"
@@ -791,6 +809,8 @@ setup_browser_multimedia() {
 # ==============================================================================
 # Pre-Driver Reboot Checkpoint
 # ==============================================================================
+# Verifies running kernel matches installed kernel RPM before compiling out-of-tree modules.
+# Prevents akmods/DKMS builds from targeting mismatched kernel headers or failing dynamically.
 setup_pre_driver_reboot() {
     log "Pre-driver reboot checkpoint"
 
@@ -817,6 +837,7 @@ setup_pre_driver_reboot() {
         echo "It will skip everything already done and pick up at GPU drivers."
         echo ""
         if confirm "Reboot now?" "Y"; then
+            # Persist completion flag so script resumes at driver configuration upon reboot
             mark_step_completed "setup_pre_driver_reboot"
             step_complete "Reboot checkpoint (rebooting)"
             run_sudo reboot
@@ -835,6 +856,7 @@ setup_pre_driver_reboot() {
 # ==============================================================================
 # Smart Driver Detection
 # ==============================================================================
+# Probes PCIe subsystem and chassis form-factor to install matching GPU hardware acceleration drivers.
 setup_drivers() {
     if [[ "$PROFILE" == "minimal" ]]; then
         if ! confirm "Configure GPU drivers?" "N"; then
@@ -854,11 +876,13 @@ setup_drivers() {
 
     log "Detected Chassis: $CHASSIS"
 
+    # Install Intel VA-API user-mode media driver for Broadwell (Gen8) and newer GPUs
     if [[ -n "$GPU_INTEL" ]]; then
         log "Intel GPU Detected: Installing intel-media-driver..."
         run_sudo dnf install -y intel-media-driver
     fi
 
+    # Swap standard Mesa drivers with RPM Fusion freeworld builds to unlock patent-encumbered H.264/H.265/VC-1 VA-API codecs
     if [[ -n "$GPU_AMD" ]]; then
         log "AMD GPU Detected: Swapping for freeworld drivers..."
         run_sudo dnf swap -y mesa-va-drivers mesa-va-drivers-freeworld
@@ -868,8 +892,10 @@ setup_drivers() {
     if [[ -n "$GPU_NVIDIA" ]]; then
         log "NVIDIA GPU Detected."
 
+        # Install akmod tooling and MOK enrollment utility for Secure Boot module signing
         run_sudo dnf install -y kmodtool akmods mokutil openssl nvtop akmod-nvidia xorg-x11-drv-nvidia-cuda libva-nvidia-driver
 
+        # Force immediate akmod compilation for running kernel
         log "Building NVIDIA kernel modules (this may take a few minutes)..."
         run_sudo akmods --force
 
@@ -1233,6 +1259,7 @@ setup_flatpaks() {
 # ==============================================================================
 # Docker Setup
 # ==============================================================================
+# Configure Docker daemon, NetworkManager unmanaged interface, and firewall isolation.
 setup_docker() {
     log "Configuring Docker..."
 
@@ -1245,6 +1272,7 @@ setup_docker() {
         return 0
     fi
 
+    # Mark docker0 as unmanaged in NetworkManager to prevent route metric conflicts and unintended teardowns
     log "Configuring NetworkManager to ignore docker0..."
     if [[ ! -f /etc/NetworkManager/conf.d/10-docker.conf ]]; then
         run_sudo tee /etc/NetworkManager/conf.d/10-docker.conf >/dev/null <<'EOF'
@@ -1257,6 +1285,7 @@ EOF
         info "NetworkManager already configured for Docker"
     fi
 
+    # Prevent firewalld daemon reloads from wiping Docker container forward and NAT iptables rules
     log "Configuring firewall for Docker..."
     if [[ -f /etc/firewalld/firewalld.conf ]]; then
         if ! grep -q "IgnoreInterfaces=docker0" /etc/firewalld/firewalld.conf; then
@@ -1275,6 +1304,7 @@ EOF
     run_sudo usermod -aG docker "${USER:-$(id -un)}"
 
     run_sudo systemctl enable containerd.service 2>/dev/null || true
+    # Clear systemd failure rate limit counter before enabling service
     if sudo systemctl is-failed docker &>/dev/null; then
         run_sudo systemctl reset-failed docker 2>/dev/null || true
     fi
@@ -1315,9 +1345,11 @@ EOF
 # ==============================================================================
 # KVM/QEMU Virtualization Setup
 # ==============================================================================
+# Configure KVM/QEMU virtualization stack, modular libvirt socket activation, and tuned profile.
 setup_kvm() {
     log "Setting up KVM/QEMU Virtualization..."
 
+    # Check for Intel VT-x (vmx) or AMD-V (svm) CPU virtualization extensions in /proc/cpuinfo
     if ! grep -E 'vmx|svm' /proc/cpuinfo &>/dev/null; then
         warn "CPU virtualization (VT-x/AMD-V) not detected or not enabled in BIOS"
         if ! confirm "Continue anyway?" "N"; then
@@ -1331,6 +1363,7 @@ setup_kvm() {
         run_sudo dnf install -y @virtualization qemu-kvm libvirt virt-install virt-manager libvirt-devel virt-top guestfs-tools
     fi
 
+    # Switch from legacy monolithic libvirtd daemon to on-demand modular socket activation (virtqemud.socket)
     if confirm "Configure virtualization services (modern socket activation)?" "Y"; then
         log "Configuring virtualization services..."
         run_sudo systemctl disable --now libvirtd.service 2>/dev/null || true
@@ -1345,6 +1378,7 @@ setup_kvm() {
         success "Firewall configured for libvirt"
     fi
 
+    # VirtIO paravirtualized storage/network drivers repository for Windows guest VMs
     if confirm "Install VirtIO drivers (required for Windows VMs)?" "Y"; then
         log "Installing VirtIO drivers..."
         run_sudo wget https://fedorapeople.org/groups/virt/virtio-win/virtio-win.repo \
@@ -1352,6 +1386,7 @@ setup_kvm() {
         run_sudo dnf install -y virtio-win || warn "VirtIO drivers installation failed"
     fi
 
+    # Apply virtual-host tuned profile for optimized kernel dirty memory ratios and scheduler latency
     if confirm "Enable performance optimizations (tuned virtual-host profile)?" "Y"; then
         log "Enabling performance optimizations..."
         run_sudo systemctl enable --now tuned
@@ -1359,10 +1394,12 @@ setup_kvm() {
         success "Performance tuning applied"
     fi
 
+    # Grant local user passwordless access to libvirt hypervisor socket
     if confirm "Add current user to libvirt group?" "Y"; then
         log "Configuring user permissions..."
         run_sudo usermod -aG libvirt "${USER:-$(id -un)}"
 
+        # Default libvirt URI directs virsh and GUI tools to system QEMU daemon
         if [[ -f ~/.bashrc ]] && ! grep -q "LIBVIRT_DEFAULT_URI" ~/.bashrc; then
             backup_file "$HOME/.bashrc"
             echo 'export LIBVIRT_DEFAULT_URI="qemu:///system"' >> ~/.bashrc
@@ -1483,6 +1520,13 @@ main() {
         check_disk_space 20 "$HOME"
     fi
 
+    # Execution order enforces strict dependency chain:
+    # 1. Package manager mirrors & DNS resolution (setup_dnf, setup_dns)
+    # 2. Power policies, greeter no-sleep, and system fonts
+    # 3. User shell environment (ZSH/Starship) & default browser
+    # 4. Domain packages, dev runtimes, container engines & virtualization (setup_dev, setup_docker, setup_kvm)
+    # 5. Pre-driver kernel verification checkpoint before building out-of-tree modules
+    # 6. GPU driver configuration and Secure Boot MOK guidance (setup_drivers)
     local steps=(
         "setup_dnf:DNF Configuration"
         "setup_dns:DNS Configuration"
@@ -1503,6 +1547,7 @@ main() {
         "setup_drivers:GPU Drivers"
     )
 
+    # Step matrices mapping profiles to required setup functions
     local -A PROFILE_STEPS
     PROFILE_STEPS[minimal]="setup_dnf setup_dns setup_fonts setup_shell setup_browser_multimedia setup_pre_driver_reboot setup_drivers"
     PROFILE_STEPS[dev]="setup_dnf setup_dns setup_power setup_nosleep setup_fonts setup_shell setup_browser_multimedia setup_gnome setup_packages setup_dev setup_antigravity setup_docker setup_kvm setup_pre_driver_reboot setup_drivers"
@@ -1516,6 +1561,7 @@ main() {
 
     init_state
 
+    # Filter execution sequence based on active profile and check completion state for idempotency
     local filtered_steps=()
     for step in "${steps[@]}"; do
         IFS=':' read -r func _ <<< "$step"
